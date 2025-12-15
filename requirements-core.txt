@@ -1,0 +1,11 @@
+# Universal Restrictor - Minimal Requirements (Core Only)
+# Install with: pip install -r requirements-core.txt
+
+# No external dependencies required for core functionality!
+# PII detection and prompt injection work with Python standard library only.
+
+# Optional: Better toxicity detection (adds ~500MB)
+# Uncomment these if needed:
+# transformers>=4.30.0
+# torch>=2.0.0
+# tf-keras>=2.15.0

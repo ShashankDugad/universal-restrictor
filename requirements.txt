@@ -1,0 +1,55 @@
+# Universal Restrictor - Requirements
+# Install with: pip install -r requirements.txt
+
+# ==============================================================================
+# CORE DEPENDENCIES (Required)
+# ==============================================================================
+
+# None - core package uses only Python standard library for PII/injection detection
+
+# ==============================================================================
+# ML DEPENDENCIES (Optional - for better toxicity detection)
+# ==============================================================================
+
+transformers>=4.30.0
+torch>=2.0.0
+tf-keras>=2.15.0
+
+# ==============================================================================
+# API DEPENDENCIES (For Step 2 - REST API)
+# ==============================================================================
+
+fastapi>=0.100.0
+uvicorn>=0.22.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# ==============================================================================
+# DEVELOPMENT DEPENDENCIES
+# ==============================================================================
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-asyncio>=0.21.0
+
+# Code quality
+black>=23.0.0
+ruff>=0.0.280
+mypy>=1.0.0
+
+# ==============================================================================
+# OPTIONAL ENHANCEMENTS
+# ==============================================================================
+
+# For async support
+aiohttp>=3.8.0
+
+# For better logging
+structlog>=23.0.0
+
+# For metrics/monitoring (Step 3+)
+prometheus-client>=0.17.0
+
+# For rate limiting (API)
+slowapi>=0.1.8
