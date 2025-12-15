@@ -1,0 +1,35 @@
+# Universal Restrictor - Docker Compose
+#
+# Usage:
+#   docker-compose up        # Start the service
+#   docker-compose up -d     # Start in background
+#   docker-compose down      # Stop the service
+#   docker-compose logs -f   # View logs
+
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: universal-restrictor
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Optional: Add for production monitoring (Step 3+)
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
