@@ -69,11 +69,37 @@ class FeedbackStorage:
         Store feedback for a request.
         
         Returns FeedbackRecord if successful, None if request not found.
+        Returns existing record if duplicate.
         """
         # Get cached request
         cached = self._request_cache.get(request_id)
         if not cached:
             return None
+        
+        # Load existing feedback
+        feedback_list = self._load_feedback()
+        
+        # Check for duplicate (same request_id and feedback_type)
+        for existing in feedback_list:
+            if (existing.get("request_id") == request_id and 
+                existing.get("feedback_type") == feedback_type.value):
+                # Return existing record instead of creating duplicate
+                return FeedbackRecord(
+                    feedback_id=existing["feedback_id"],
+                    tenant_id=existing["tenant_id"],
+                    request_id=existing["request_id"],
+                    input_hash=existing["input_hash"],
+                    input_length=existing["input_length"],
+                    original_decision=existing["original_decision"],
+                    original_categories=existing["original_categories"],
+                    original_confidence=existing["original_confidence"],
+                    feedback_type=FeedbackType(existing["feedback_type"]),
+                    corrected_category=existing.get("corrected_category"),
+                    comment=existing.get("comment"),
+                    timestamp=datetime.fromisoformat(existing["timestamp"]),
+                    reviewed=existing.get("reviewed", False),
+                    included_in_training=existing.get("included_in_training", False)
+                )
         
         # Create feedback record
         record = FeedbackRecord(
@@ -92,9 +118,6 @@ class FeedbackStorage:
             reviewed=False,
             included_in_training=False
         )
-        
-        # Load existing feedback
-        feedback_list = self._load_feedback()
         
         # Add new record
         feedback_list.append(record.model_dump(mode="json"))

@@ -1,8 +1,8 @@
 [
   {
-    "feedback_id": "fb_0f6c50759deb",
+    "feedback_id": "fb_9a1dd7f42a92",
     "tenant_id": "default",
-    "request_id": "d39c9ac3-331b-4f53-84a5-fe913f7bd8ef",
+    "request_id": "ac339244-471e-420d-90f8-a13917fa12da",
     "input_hash": "493858c9651e1ca18c232e38232c8ae4b6c107aaa977f87c4f27efee6fb1eb82",
     "input_length": 30,
     "original_decision": "redact",
@@ -13,43 +13,7 @@
     "feedback_type": "false_positive",
     "corrected_category": null,
     "comment": "This is a public business email",
-    "timestamp": "2025-12-15T04:28:32.242269",
-    "reviewed": false,
-    "included_in_training": false
-  },
-  {
-    "feedback_id": "fb_a5e98b96cee1",
-    "tenant_id": "default",
-    "request_id": "d39c9ac3-331b-4f53-84a5-fe913f7bd8ef",
-    "input_hash": "493858c9651e1ca18c232e38232c8ae4b6c107aaa977f87c4f27efee6fb1eb82",
-    "input_length": 30,
-    "original_decision": "redact",
-    "original_categories": [
-      "pii_email"
-    ],
-    "original_confidence": 0.95,
-    "feedback_type": "false_positive",
-    "corrected_category": null,
-    "comment": "This is a public business email",
-    "timestamp": "2025-12-15T04:28:34.998840",
-    "reviewed": false,
-    "included_in_training": false
-  },
-  {
-    "feedback_id": "fb_30e614a80083",
-    "tenant_id": "default",
-    "request_id": "d39c9ac3-331b-4f53-84a5-fe913f7bd8ef",
-    "input_hash": "493858c9651e1ca18c232e38232c8ae4b6c107aaa977f87c4f27efee6fb1eb82",
-    "input_length": 30,
-    "original_decision": "redact",
-    "original_categories": [
-      "pii_email"
-    ],
-    "original_confidence": 0.95,
-    "feedback_type": "false_positive",
-    "corrected_category": null,
-    "comment": "This is a public business email",
-    "timestamp": "2025-12-15T04:29:54.172722",
+    "timestamp": "2025-12-15T04:33:06.892918",
     "reviewed": false,
     "included_in_training": false
   }
