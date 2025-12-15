@@ -1,38 +1,21 @@
 """
-Toxicity Detector - Using Llama Guard 3 via Groq API.
-
-Llama Guard 3 is Meta's safety classifier trained to detect:
-- Violent Crimes
-- Non-Violent Crimes
-- Sex-Related Crimes
-- Child Sexual Exploitation
-- Defamation
-- Specialized Advice
-- Privacy
-- Intellectual Property
-- Indiscriminate Weapons
-- Hate
-- Suicide & Self-Harm
-- Sexual Content
-- Elections
-
-Falls back to keyword matching if API unavailable.
+Toxicity Detector - Local Llama Guard 3 (no external API).
 """
 
 import os
+import re
 import logging
-from typing import List, Optional, Dict
+from typing import List
 
 from ..models import Detection, Category, Severity
 
 logger = logging.getLogger(__name__)
 
-# Llama Guard 3 categories mapped to our categories
-LLAMA_GUARD_CATEGORY_MAP = {
+LLAMA_GUARD_CATEGORIES = {
     "S1": ("violent_crimes", Category.TOXIC_VIOLENCE, Severity.CRITICAL),
     "S2": ("non_violent_crimes", Category.TOXIC_HARASSMENT, Severity.HIGH),
     "S3": ("sex_related_crimes", Category.TOXIC_SEXUAL, Severity.CRITICAL),
-    "S4": ("child_exploitation", Category.TOXIC_SEXUAL, Severity.CRITICAL),
+    "S4": ("hate", Category.TOXIC_HATE, Severity.CRITICAL),
     "S5": ("defamation", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
     "S6": ("specialized_advice", Category.TOXIC_HARASSMENT, Severity.LOW),
     "S7": ("privacy", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
@@ -44,233 +27,154 @@ LLAMA_GUARD_CATEGORY_MAP = {
     "S13": ("elections", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
 }
 
-CATEGORY_EXPLANATIONS = {
-    "S1": "Violent crimes content detected",
-    "S2": "Non-violent crimes content detected",
-    "S3": "Sex-related crimes content detected",
-    "S4": "Child exploitation content detected",
-    "S5": "Defamatory content detected",
-    "S6": "Specialized advice (medical/legal/financial) detected",
-    "S7": "Privacy violation content detected",
-    "S8": "Intellectual property violation detected",
-    "S9": "Weapons/explosives content detected",
-    "S10": "Hate speech detected",
-    "S11": "Suicide or self-harm content detected",
-    "S12": "Sexual content detected",
-    "S13": "Election misinformation detected",
-}
+# Finance-related patterns (to filter false positives)
+FINANCE_PATTERNS = [
+    r'(?i)\b(buy|sell|target|nifty|sensex|reliance|tcs|hdfcbank|infy|stock|share|trading)\b',
+    r'(?i)\b(loan|emi|interest|credit|account|bank|upi|ifsc)\b',
+]
+
+_model_instance = None
+
+
+def get_llm():
+    global _model_instance
+    
+    if _model_instance is not None:
+        return _model_instance
+    
+    model_path = os.path.join(
+        os.path.dirname(__file__),
+        "..", "..", "models", "Llama-Guard-3-8B.Q4_K_M.gguf"
+    )
+    
+    if not os.path.exists(model_path):
+        logger.warning(f"Model not found: {model_path}")
+        return None
+    
+    try:
+        from llama_cpp import Llama
+        
+        logger.info("Loading Llama Guard 3...")
+        _model_instance = Llama(
+            model_path=model_path,
+            n_ctx=2048,
+            n_threads=4,
+            n_gpu_layers=-1,
+            verbose=False
+        )
+        logger.info("Llama Guard 3 loaded")
+        return _model_instance
+        
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        return None
 
 
 class ToxicityDetector:
-    """
-    Detect toxic content using Llama Guard 3 via Groq API.
+    def __init__(self):
+        self.name = "toxicity_llama_guard_local"
+        self._finance_patterns = [re.compile(p) for p in FINANCE_PATTERNS]
     
-    Llama Guard 3 is Meta's state-of-the-art safety classifier.
-    Uses Groq for fast, free inference.
-    
-    Falls back to keyword matching if API unavailable.
-    """
-    
-    def __init__(self, use_gpu: bool = False):
-        """
-        Initialize the detector.
-        
-        Args:
-            use_gpu: Ignored (using API), kept for interface compatibility
-        """
-        self.name = "toxicity_llama_guard_3"
-        self.model_name = "meta-llama/llama-guard-4-12b"
-        
-        self._client = None
-        self._api_available = False
-        self._initialized = False
-        
-        # Fallback keywords
-        self._toxic_keywords = self._build_keyword_list()
-    
-    def _build_keyword_list(self) -> Dict[Category, List[str]]:
-        """Build fallback keyword lists for each category."""
-        return {
-            Category.TOXIC_PROFANITY: [
-                "fuck", "shit", "damn", "bitch", "crap",
-                "bastard", "dick", "piss", "cunt", "asshole",
-            ],
-            Category.TOXIC_HATE: [
-                "nazi", "faggot", "retard",
-            ],
-            Category.TOXIC_VIOLENCE: [
-                "kill you", "murder you", "shoot you", "stab you",
-                "beat you up", "death threat", "i will kill",
-                "going to kill", "want to kill",
-            ],
-            Category.TOXIC_HARASSMENT: [
-                "loser", "idiot", "moron", "stupid",
-                "pathetic", "worthless", "ugly", "disgusting",
-            ],
-            Category.TOXIC_SELF_HARM: [
-                "kill myself", "want to die", "end my life",
-                "suicide", "cut myself",
-            ],
-        }
-    
-    def _init_client(self):
-        """Initialize Groq client."""
-        if self._initialized:
-            return
-        
-        try:
-            # Load environment variables
-            from dotenv import load_dotenv
-            load_dotenv()
-            
-            api_key = os.getenv("GROQ_API_KEY")
-            
-            if not api_key:
-                logger.warning("GROQ_API_KEY not found in environment. Using keyword fallback.")
-                self._api_available = False
-                self._initialized = True
-                return
-            
-            from groq import Groq
-            
-            self._client = Groq(api_key=api_key)
-            self._api_available = True
-            self._initialized = True
-            logger.info("Groq client initialized successfully")
-            
-        except ImportError:
-            logger.warning("groq package not installed. Run: pip install groq")
-            self._api_available = False
-            self._initialized = True
-            
-        except Exception as e:
-            logger.warning(f"Failed to initialize Groq client: {e}. Using keyword fallback.")
-            self._api_available = False
-            self._initialized = True
+    def _is_finance_text(self, text: str) -> bool:
+        """Check if text is finance-related."""
+        for pattern in self._finance_patterns:
+            if pattern.search(text):
+                return True
+        return False
     
     def detect(self, text: str, threshold: float = 0.5) -> List[Detection]:
-        """
-        Detect toxic content in text using Llama Guard 3.
+        llm = get_llm()
         
-        Args:
-            text: Input text to analyze
-            threshold: Not used for Llama Guard (binary safe/unsafe)
-            
-        Returns:
-            List of Detection objects for toxic content found
-        """
-        self._init_client()
+        if llm is None:
+            return self._fallback_detect(text)
         
-        if not self._api_available:
-            return self._detect_keywords(text)
+        # Skip toxicity check for finance-related text (handled by finance detector)
+        if self._is_finance_text(text):
+            return []
         
-        return self._detect_llama_guard(text)
-    
-    def _detect_llama_guard(self, text: str) -> List[Detection]:
-        """Detect using Llama Guard 3 via Groq API."""
-        detections = []
+        prompt = f'''<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+Task: Check if there is unsafe content in 'User' messages in conversations according to our safety policy.
+
+<BEGIN CONVERSATION>
+
+User: {text}
+
+<END CONVERSATION>
+
+Provide your safety assessment for User in the above conversation:
+- First line must read 'safe' or 'unsafe'.
+- If unsafe, a second line must include a comma-separated list of violated categories.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'''
         
         try:
-            # Call Llama Guard 3
-            response = self._client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": text
-                    }
-                ],
-                max_tokens=100,
-                temperature=0.0,
-            )
+            output = llm(prompt, max_tokens=50, stop=['<|eot_id|>'])
+            result = output['choices'][0]['text'].strip()
+            return self._parse_result(result, text)
             
-            # Parse response
-            result = response.choices[0].message.content.strip()
-            logger.debug(f"Llama Guard response: {result}")
+        except Exception as e:
+            logger.error(f"Inference error: {e}")
+            return self._fallback_detect(text)
+    
+    def _parse_result(self, result: str, text: str) -> List[Detection]:
+        detections = []
+        lines = result.strip().split('\n')
+        
+        if not lines or lines[0].lower().startswith('safe'):
+            return []
+        
+        if lines[0].lower().startswith('unsafe'):
+            categories = []
+            for line in lines:
+                for word in line.replace(',', ' ').split():
+                    word = word.strip().upper()
+                    if word.startswith('S') and len(word) <= 3 and word[1:].isdigit():
+                        categories.append(word)
             
-            # Llama Guard returns "safe" or "unsafe\nSX" where X is category
-            if result.lower().startswith("safe"):
-                return []  # No detections
+            if not categories:
+                categories = ['S10']
             
-            # Parse unsafe response
-            lines = result.strip().split("\n")
-            
-            if len(lines) >= 1 and lines[0].lower() == "unsafe":
-                # Extract categories (S1, S2, etc.)
-                categories_found = []
-                
-                for line in lines[1:]:
-                    line = line.strip()
-                    # Handle formats like "S1", "S1,S2", "S1, S2"
-                    parts = [p.strip() for p in line.replace(",", " ").split()]
-                    for part in parts:
-                        if part.upper().startswith("S") and part.upper() in LLAMA_GUARD_CATEGORY_MAP:
-                            categories_found.append(part.upper())
-                
-                # If no specific category found but marked unsafe
-                if not categories_found:
-                    categories_found = ["S10"]  # Default to hate
-                
-                # Create detections for each category
-                for cat_code in categories_found:
-                    cat_name, our_category, severity = LLAMA_GUARD_CATEGORY_MAP.get(
-                        cat_code, 
-                        ("unknown", Category.TOXIC_PROFANITY, Severity.MEDIUM)
-                    )
+            for cat in categories:
+                if cat in LLAMA_GUARD_CATEGORIES:
+                    cat_name, our_category, severity = LLAMA_GUARD_CATEGORIES[cat]
                     
                     detections.append(Detection(
                         category=our_category,
                         severity=severity,
-                        confidence=0.95,  # Llama Guard is high confidence
+                        confidence=0.95,
                         matched_text=text[:100] + "..." if len(text) > 100 else text,
                         start_pos=0,
                         end_pos=len(text),
-                        explanation=CATEGORY_EXPLANATIONS.get(cat_code, f"Unsafe content detected ({cat_code})"),
-                        detector=f"{self.name}_{cat_code}"
+                        explanation=f"Unsafe content: {cat_name}",
+                        detector=self.name
                     ))
-            
-            return detections
-            
-        except Exception as e:
-            logger.error(f"Llama Guard API error: {e}")
-            # Fall back to keywords on API error
-            return self._detect_keywords(text)
+        
+        return detections
     
-    def _detect_keywords(self, text: str) -> List[Detection]:
-        """Fallback keyword-based detection."""
+    def _fallback_detect(self, text: str) -> List[Detection]:
         detections = []
         text_lower = text.lower()
         
-        for category, keywords in self._toxic_keywords.items():
-            for keyword in keywords:
-                if keyword in text_lower:
-                    start = text_lower.find(keyword)
-                    end = start + len(keyword)
-                    
-                    severity = {
-                        Category.TOXIC_HATE: Severity.CRITICAL,
-                        Category.TOXIC_VIOLENCE: Severity.CRITICAL,
-                        Category.TOXIC_SELF_HARM: Severity.CRITICAL,
-                        Category.TOXIC_SEXUAL: Severity.HIGH,
-                        Category.TOXIC_HARASSMENT: Severity.HIGH,
-                        Category.TOXIC_PROFANITY: Severity.MEDIUM,
-                    }.get(category, Severity.MEDIUM)
-                    
+        toxic_keywords = {
+            Category.TOXIC_HATE: ['hate all', 'eliminate them', 'exterminate'],
+            Category.TOXIC_VIOLENCE: ['kill you', 'murder you', 'shoot you', 'stab you'],
+            Category.TOXIC_SELF_HARM: ['kill myself', 'suicide', 'end my life'],
+        }
+        
+        for category, keywords in toxic_keywords.items():
+            for kw in keywords:
+                if kw in text_lower:
                     detections.append(Detection(
                         category=category,
-                        severity=severity,
-                        confidence=0.70,
-                        matched_text=text[start:end],
-                        start_pos=start,
-                        end_pos=end,
-                        explanation=f"Toxic keyword detected: '{keyword}'",
-                        detector="toxicity_keyword_fallback"
+                        severity=Severity.HIGH,
+                        confidence=0.7,
+                        matched_text=kw,
+                        start_pos=text_lower.find(kw),
+                        end_pos=text_lower.find(kw) + len(kw),
+                        explanation=f"Toxic keyword: {kw}",
+                        detector="toxicity_fallback"
                     ))
+                    break
         
-        # Deduplicate - keep one per category
-        seen_categories = {}
-        for d in detections:
-            if d.category not in seen_categories:
-                seen_categories[d.category] = d
-        
-        return list(seen_categories.values())
+        return detections

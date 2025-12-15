@@ -11,21 +11,19 @@ from .models import (
     Detection, Decision, Action, Severity, Category, PolicyConfig
 )
 from .detectors import PIIDetector, ToxicityDetector, PromptInjectionDetector, FinanceIntentDetector
+from .detectors.toxicity import get_llm
 
 
 class Restrictor:
     """
     Main engine for content restriction and safety.
-    
-    Orchestrates multiple detectors:
-    - PII Detection (regex-based)
-    - Toxicity Detection (Llama Guard 4)
-    - Prompt Injection Detection (pattern-based)
-    - Finance Intent Detection (India-specific)
     """
     
     def __init__(self, policy: PolicyConfig = None):
         self.policy = policy or PolicyConfig()
+        
+        # Pre-load Llama Guard model
+        get_llm()
         
         # Initialize detectors
         self.pii_detector = PIIDetector()
@@ -36,13 +34,6 @@ class Restrictor:
     def analyze(self, text: str, context: Optional[dict] = None) -> Decision:
         """
         Analyze text and return a decision.
-        
-        Args:
-            text: The text to analyze
-            context: Optional context (e.g., user_id, conversation_id)
-            
-        Returns:
-            Decision object with action, detections, and optional redacted text
         """
         start_time = time.time()
         
@@ -64,7 +55,7 @@ class Restrictor:
         finance_detections = self.finance_detector.detect(text)
         all_detections.extend(finance_detections)
         
-        # Determine action based on detections
+        # Determine action
         action = self._determine_action(all_detections)
         
         # Generate redacted text if needed
@@ -76,7 +67,11 @@ class Restrictor:
         processing_time = (time.time() - start_time) * 1000
         input_hash = hashlib.sha256(text.encode()).hexdigest()
         categories_found = list(set(d.category for d in all_detections))
-        max_severity = max((d.severity for d in all_detections), default=None, key=lambda s: list(Severity).index(s) if s else -1)
+        max_severity = max(
+            (d.severity for d in all_detections), 
+            default=None, 
+            key=lambda s: list(Severity).index(s) if s else -1
+        )
         max_confidence = max((d.confidence for d in all_detections), default=0.0)
         
         return Decision(
@@ -96,21 +91,18 @@ class Restrictor:
         if not detections:
             return Action.ALLOW
         
-        # Check for blocking conditions
+        # Block on critical categories
         for d in detections:
-            # Block on prompt injection
             if d.category in [Category.PROMPT_INJECTION, Category.JAILBREAK_ATTEMPT]:
                 return Action.BLOCK
             
-            # Block on critical toxicity
             if d.category in [Category.TOXIC_HATE, Category.TOXIC_VIOLENCE, Category.TOXIC_SELF_HARM]:
                 return Action.BLOCK
             
-            # Block on insider info (compliance critical)
             if d.category == Category.FINANCE_INSIDER_INFO:
                 return Action.BLOCK
         
-        # Check for warning conditions (finance intent)
+        # Warning for finance intent
         for d in detections:
             if d.category in [
                 Category.FINANCE_TRADING_INTENT,
@@ -119,12 +111,11 @@ class Restrictor:
             ]:
                 return Action.ALLOW_WITH_WARNING
         
-        # Check for redaction (PII)
+        # Redact PII
         has_pii = any(d.category.value.startswith('pii_') for d in detections)
         if has_pii:
             return Action.REDACT
         
-        # Default: allow with warning for other detections
         if detections:
             return Action.ALLOW_WITH_WARNING
         
