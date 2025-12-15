@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-restrictor"
+version = "0.1.0"
+description = "Model-agnostic content classification for LLM applications. Detects PII, toxicity, and prompt injection."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = [
+    "llm",
+    "guardrails",
+    "content-moderation",
+    "pii-detection",
+    "toxicity-detection",
+    "prompt-injection",
+    "ai-safety",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+]
+
+dependencies = [
+    # Core - no heavy dependencies
+]
+
+[project.optional-dependencies]
+ml = [
+    "transformers>=4.30.0",
+    "torch>=2.0.0",
+]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "pydantic>=2.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.0.280",
+    "mypy>=1.0.0",
+]
+all = [
+    "universal-restrictor[ml,api,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/universal-restrictor"
+Documentation = "https://github.com/yourusername/universal-restrictor#readme"
+Repository = "https://github.com/yourusername/universal-restrictor"
+Issues = "https://github.com/yourusername/universal-restrictor/issues"
+
+[project.scripts]
+restrictor = "restrictor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["restrictor*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --cov=restrictor --cov-report=term-missing"
