@@ -1,281 +1,244 @@
 """
-PII Detector - Pattern-based detection for personally identifiable information.
+PII Detector - Regex-based detection for personally identifiable information.
 
-Supports:
-- International: Email, phone, credit card, SSN, IP address
-- India-specific: Aadhaar, PAN, Indian phone numbers
-- Secrets: API keys, passwords in common formats
-
-Uses regex for speed. ML-based NER can be layered on top for names/addresses.
+Detects:
+- Email addresses
+- Phone numbers (US, India, International)
+- Credit card numbers
+- SSN (US)
+- Aadhaar (India)
+- PAN (India)
+- API keys and secrets
+- IP addresses
+- Passwords in config
 """
 
 import re
-from typing import List, Tuple, Optional
-from dataclasses import dataclass
+from typing import List, Dict, Tuple
 
 from ..models import Detection, Category, Severity
 
 
-@dataclass
-class PIIPattern:
-    """Definition of a PII pattern to detect."""
-    category: Category
-    pattern: re.Pattern
-    severity: Severity
-    confidence: float  # Base confidence for regex match
-    explanation: str
-    validator: Optional[callable] = None  # Optional validation function
+# PII patterns mapped to categories
+PII_PATTERNS: Dict[Category, List[Tuple[str, str]]] = {
+    
+    Category.PII_EMAIL: [
+        (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', "Email address detected"),
+    ],
+    
+    Category.PII_PHONE: [
+        # US phone numbers
+        (r'\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b', "US phone number detected"),
+        # Indian phone numbers
+        (r'(?:\+91[-.\s]?)?[6-9]\d{9}\b', "Indian phone number detected"),
+        # International format
+        (r'\b\+\d{1,3}[-.\s]?\d{6,14}\b', "International phone number detected"),
+    ],
+    
+    Category.PII_CREDIT_CARD: [
+        # Visa, Mastercard, Amex, Discover (with optional separators)
+        (r'\b(?:4[0-9]{3}|5[1-5][0-9]{2}|3[47][0-9]{2}|6(?:011|5[0-9]{2}))[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{3,4}\b', "Credit card number detected"),
+    ],
+    
+    Category.PII_SSN: [
+        # US Social Security Number
+        (r'\b(?!000|666|9\d{2})\d{3}[-\s]?(?!00)\d{2}[-\s]?(?!0000)\d{4}\b', "SSN detected"),
+    ],
+    
+    Category.PII_AADHAAR: [
+        # Indian Aadhaar (12 digits, first digit 2-9)
+        (r'\b[2-9]\d{3}[-\s]?\d{4}[-\s]?\d{4}\b', "Aadhaar number detected"),
+    ],
+    
+    Category.PII_PAN: [
+        # Indian PAN (5 letters, 4 digits, 1 letter)
+        (r'\b[A-Z]{5}\d{4}[A-Z]\b', "PAN number detected"),
+    ],
+    
+    Category.PII_API_KEY: [
+        # Generic secrets (password=, api_key=, token=, etc.)
+        (r'(?i)(?:password|passwd|pwd|secret|token|api_key|apikey|auth|credentials?)\s*[:=]\s*["\']?([^\s"\']{8,})["\']?', "Secret/password in config detected"),
+        
+        # OpenAI API keys (sk-..., sk-proj-...)
+        (r'\b(sk-[a-zA-Z0-9_-]{20,})\b', "OpenAI API key detected"),
+        
+        # AWS Access Key ID
+        (r'\b(AKIA[0-9A-Z]{16})\b', "AWS Access Key ID detected"),
+        
+        # AWS Secret Access Key (40 char base64-ish)
+        (r'(?i)(?:aws_secret|secret_access_key)\s*[:=]\s*["\']?([A-Za-z0-9/+=]{40})["\']?', "AWS Secret Access Key detected"),
+        
+        # GitHub tokens
+        (r'\b(ghp_[a-zA-Z0-9]{36})\b', "GitHub Personal Access Token detected"),
+        (r'\b(github_pat_[a-zA-Z0-9_]{22,})\b', "GitHub Fine-grained PAT detected"),
+        (r'\b(gho_[a-zA-Z0-9]{36})\b', "GitHub OAuth Token detected"),
+        (r'\b(ghs_[a-zA-Z0-9]{36})\b', "GitHub Server Token detected"),
+        
+        # Groq API keys
+        (r'\b(gsk_[a-zA-Z0-9]{20,})\b', "Groq API key detected"),
+        
+        # Anthropic API keys
+        (r'\b(sk-ant-[a-zA-Z0-9_-]{20,})\b', "Anthropic API key detected"),
+        
+        # Google API keys
+        (r'\b(AIza[0-9A-Za-z_-]{35})\b', "Google API key detected"),
+        
+        # Stripe keys
+        (r'\b(sk_live_[a-zA-Z0-9]{24,})\b', "Stripe Live Secret Key detected"),
+        (r'\b(sk_test_[a-zA-Z0-9]{24,})\b', "Stripe Test Secret Key detected"),
+        (r'\b(pk_live_[a-zA-Z0-9]{24,})\b', "Stripe Live Publishable Key detected"),
+        (r'\b(pk_test_[a-zA-Z0-9]{24,})\b', "Stripe Test Publishable Key detected"),
+        
+        # Slack tokens
+        (r'\b(xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{24})\b', "Slack Bot Token detected"),
+        (r'\b(xoxp-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{24})\b', "Slack User Token detected"),
+        
+        # Twilio
+        (r'\b(SK[a-f0-9]{32})\b', "Twilio API Key detected"),
+        
+        # SendGrid
+        (r'\b(SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43})\b', "SendGrid API key detected"),
+        
+        # Generic Bearer tokens
+        (r'\bBearer\s+([a-zA-Z0-9_-]{20,})\b', "Bearer token detected"),
+        
+        # Private keys (PEM format indicator)
+        (r'-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----', "Private key detected"),
+        
+        # Generic long hex strings that look like secrets (32+ chars)
+        (r'(?i)(?:key|secret|token|password|api)\s*[:=]\s*["\']?([a-f0-9]{32,})["\']?', "Hex secret detected"),
+    ],
+    
+    Category.PII_IP_ADDRESS: [
+        # IPv4
+        (r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', "IPv4 address detected"),
+        # IPv6 (simplified)
+        (r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b', "IPv6 address detected"),
+    ],
+    
+    Category.PII_ADDRESS: [
+        # US ZIP codes
+        (r'\b\d{5}(?:-\d{4})?\b', "US ZIP code detected"),
+        # Indian PIN codes
+        (r'\b[1-9][0-9]{5}\b', "Indian PIN code detected"),
+    ],
+}
+
+# Severity mapping for PII categories
+PII_SEVERITY: Dict[Category, Severity] = {
+    Category.PII_EMAIL: Severity.MEDIUM,
+    Category.PII_PHONE: Severity.MEDIUM,
+    Category.PII_CREDIT_CARD: Severity.CRITICAL,
+    Category.PII_SSN: Severity.CRITICAL,
+    Category.PII_AADHAAR: Severity.CRITICAL,
+    Category.PII_PAN: Severity.HIGH,
+    Category.PII_API_KEY: Severity.CRITICAL,
+    Category.PII_IP_ADDRESS: Severity.LOW,
+    Category.PII_ADDRESS: Severity.LOW,
+    Category.PII_NAME: Severity.MEDIUM,
+}
 
 
 class PIIDetector:
     """
     Detect PII using regex patterns.
     
-    Fast, deterministic, no ML dependencies.
-    Layered approach: regex first, then optional NER for names/addresses.
+    Fast, deterministic, and explainable.
+    No ML models required.
     """
     
     def __init__(self):
-        self.patterns = self._build_patterns()
         self.name = "pii_regex"
+        # Compile patterns for performance
+        self._compiled_patterns: Dict[Category, List[Tuple[re.Pattern, str]]] = {}
+        
+        for category, patterns in PII_PATTERNS.items():
+            self._compiled_patterns[category] = [
+                (re.compile(pattern), explanation)
+                for pattern, explanation in patterns
+            ]
     
-    def _build_patterns(self) -> List[PIIPattern]:
-        """Build all PII detection patterns."""
-        
-        patterns = []
-        
-        # Email
-        patterns.append(PIIPattern(
-            category=Category.PII_EMAIL,
-            pattern=re.compile(
-                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-                re.IGNORECASE
-            ),
-            severity=Severity.MEDIUM,
-            confidence=0.95,
-            explanation="Email address detected"
-        ))
-        
-        # Phone - International format
-        patterns.append(PIIPattern(
-            category=Category.PII_PHONE,
-            pattern=re.compile(
-                r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
-            ),
-            severity=Severity.MEDIUM,
-            confidence=0.85,
-            explanation="Phone number detected"
-        ))
-        
-        # Phone - Indian format (10 digits starting with 6-9)
-        patterns.append(PIIPattern(
-            category=Category.PII_PHONE,
-            pattern=re.compile(
-                r'(?:\+91[-.\s]?)?[6-9]\d{9}\b'
-            ),
-            severity=Severity.MEDIUM,
-            confidence=0.90,
-            explanation="Indian phone number detected"
-        ))
-        
-        # Credit Card (Luhn validation recommended but not required)
-        patterns.append(PIIPattern(
-            category=Category.PII_CREDIT_CARD,
-            pattern=re.compile(
-                r'\b(?:4[0-9]{12}(?:[0-9]{3})?|'  # Visa
-                r'5[1-5][0-9]{14}|'               # MasterCard
-                r'3[47][0-9]{13}|'                # Amex
-                r'6(?:011|5[0-9]{2})[0-9]{12})\b' # Discover
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.90,
-            explanation="Credit card number detected",
-            validator=self._validate_luhn
-        ))
-        
-        # Credit card with spaces/dashes
-        patterns.append(PIIPattern(
-            category=Category.PII_CREDIT_CARD,
-            pattern=re.compile(
-                r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.85,
-            explanation="Credit card number detected (with separators)"
-        ))
-        
-        # SSN (US)
-        patterns.append(PIIPattern(
-            category=Category.PII_SSN,
-            pattern=re.compile(
-                r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.80,
-            explanation="US Social Security Number detected"
-        ))
-        
-        # Aadhaar (Indian 12-digit ID)
-        patterns.append(PIIPattern(
-            category=Category.PII_AADHAAR,
-            pattern=re.compile(
-                r'\b[2-9]\d{3}[-\s]?\d{4}[-\s]?\d{4}\b'
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.85,
-            explanation="Aadhaar number detected",
-            validator=self._validate_aadhaar
-        ))
-        
-        # PAN (Indian tax ID - AAAAA0000A format: 5 letters + 4 digits + 1 letter)
-        patterns.append(PIIPattern(
-            category=Category.PII_PAN,
-            pattern=re.compile(
-                r'\b[A-Z]{5}\d{4}[A-Z]\b',
-                re.IGNORECASE
-            ),
-            severity=Severity.HIGH,
-            confidence=0.90,
-            explanation="PAN card number detected"
-        ))
-        
-        # IP Address (IPv4)
-        patterns.append(PIIPattern(
-            category=Category.PII_IP_ADDRESS,
-            pattern=re.compile(
-                r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
-                r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
-            ),
-            severity=Severity.LOW,
-            confidence=0.95,
-            explanation="IP address detected"
-        ))
-        
-        # API Keys (common patterns)
-        patterns.append(PIIPattern(
-            category=Category.PII_API_KEY,
-            pattern=re.compile(
-                r'\b(?:sk-[a-zA-Z0-9]{32,}|'           # OpenAI
-                r'sk-ant-[a-zA-Z0-9-]{32,}|'          # Anthropic
-                r'AIza[0-9A-Za-z_-]{35}|'             # Google
-                r'AKIA[0-9A-Z]{16}|'                  # AWS Access Key
-                r'ghp_[a-zA-Z0-9]{36}|'               # GitHub
-                r'xox[baprs]-[0-9a-zA-Z-]{10,})\b'    # Slack
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.95,
-            explanation="API key or secret detected"
-        ))
-        
-        # Generic secret patterns
-        patterns.append(PIIPattern(
-            category=Category.PII_PASSWORD,
-            pattern=re.compile(
-                r'(?i)(?:password|passwd|pwd|secret|token|api_key|apikey|auth)'
-                r'\s*[:=]\s*["\']?([^\s"\']{8,})["\']?'
-            ),
-            severity=Severity.CRITICAL,
-            confidence=0.80,
-            explanation="Password or secret in key=value format detected"
-        ))
-        
-        # Passport (generic format)
-        patterns.append(PIIPattern(
-            category=Category.PII_PASSPORT,
-            pattern=re.compile(
-                r'\b[A-Z]{1,2}[0-9]{6,9}\b'
-            ),
-            severity=Severity.HIGH,
-            confidence=0.60,  # Lower confidence - many false positives
-            explanation="Possible passport number detected"
-        ))
-        
-        return patterns
-    
-    def _validate_luhn(self, number: str) -> bool:
-        """Validate credit card number using Luhn algorithm."""
-        digits = [int(d) for d in re.sub(r'[-\s]', '', number)]
-        odd_digits = digits[-1::-2]
-        even_digits = digits[-2::-2]
-        
-        total = sum(odd_digits)
-        for d in even_digits:
-            d *= 2
-            if d > 9:
-                d -= 9
-            total += d
-        
-        return total % 10 == 0
-    
-    def _validate_aadhaar(self, number: str) -> bool:
-        """Basic Aadhaar validation (Verhoeff algorithm is more accurate)."""
-        digits = re.sub(r'[-\s]', '', number)
-        if len(digits) != 12:
-            return False
-        # First digit can't be 0 or 1
-        if digits[0] in '01':
-            return False
-        return True
-    
-    def detect(self, text: str) -> List[Detection]:
+    def detect(self, text: str, categories: List[Category] = None) -> List[Detection]:
         """
-        Detect all PII in the given text.
+        Detect PII in text.
         
         Args:
             text: Input text to scan
+            categories: Optional list of categories to check (default: all)
             
         Returns:
-            List of Detection objects for each PII found
+            List of Detection objects
         """
         detections = []
         
-        for pii_pattern in self.patterns:
-            for match in pii_pattern.pattern.finditer(text):
-                matched_text = match.group()
-                
-                # Apply validator if exists
-                confidence = pii_pattern.confidence
-                if pii_pattern.validator:
-                    if not pii_pattern.validator(matched_text):
-                        confidence *= 0.5  # Reduce confidence if validation fails
-                
-                detections.append(Detection(
-                    category=pii_pattern.category,
-                    severity=pii_pattern.severity,
-                    confidence=confidence,
-                    matched_text=matched_text,
-                    start_pos=match.start(),
-                    end_pos=match.end(),
-                    explanation=pii_pattern.explanation,
-                    detector=self.name
-                ))
+        categories_to_check = categories or list(self._compiled_patterns.keys())
         
-        # Deduplicate overlapping detections (keep highest confidence)
-        detections = self._deduplicate(detections)
+        for category in categories_to_check:
+            if category not in self._compiled_patterns:
+                continue
+                
+            for pattern, explanation in self._compiled_patterns[category]:
+                for match in pattern.finditer(text):
+                    # Get the matched text (use group 1 if exists, else group 0)
+                    try:
+                        matched_text = match.group(1) if match.lastindex else match.group(0)
+                    except IndexError:
+                        matched_text = match.group(0)
+                    
+                    # Skip very short matches (likely false positives)
+                    if len(matched_text) < 4:
+                        continue
+                    
+                    # Skip common false positives for ZIP/PIN codes
+                    if category == Category.PII_ADDRESS:
+                        # Skip if it looks like a year or common number
+                        if matched_text in ['2023', '2024', '2025', '10000', '12345']:
+                            continue
+                    
+                    detections.append(Detection(
+                        category=category,
+                        severity=PII_SEVERITY.get(category, Severity.MEDIUM),
+                        confidence=0.95,  # High confidence for regex matches
+                        matched_text=matched_text,
+                        start_pos=match.start(),
+                        end_pos=match.end(),
+                        explanation=explanation,
+                        detector=self.name
+                    ))
         
-        return detections
+        # Remove duplicates (same position, same category)
+        seen = set()
+        unique_detections = []
+        for d in detections:
+            key = (d.category, d.start_pos, d.end_pos)
+            if key not in seen:
+                seen.add(key)
+                unique_detections.append(d)
+        
+        return unique_detections
     
-    def _deduplicate(self, detections: List[Detection]) -> List[Detection]:
-        """Remove overlapping detections, keeping highest confidence."""
+    def redact(self, text: str, detections: List[Detection] = None) -> str:
+        """
+        Redact PII from text.
+        
+        Args:
+            text: Original text
+            detections: Optional pre-computed detections
+            
+        Returns:
+            Text with PII replaced by [REDACTED]
+        """
+        if detections is None:
+            detections = self.detect(text)
+        
         if not detections:
-            return []
+            return text
         
-        # Sort by start position, then by confidence (descending)
-        sorted_detections = sorted(
-            detections, 
-            key=lambda d: (d.start_pos, -d.confidence)
-        )
+        # Sort by position (reverse) to replace from end to start
+        sorted_detections = sorted(detections, key=lambda d: d.start_pos, reverse=True)
         
-        result = []
-        last_end = -1
-        
+        result = text
         for detection in sorted_detections:
-            if detection.start_pos >= last_end:
-                result.append(detection)
-                last_end = detection.end_pos
-            elif detection.confidence > result[-1].confidence:
-                # Replace if higher confidence and overlapping
-                result[-1] = detection
-                last_end = detection.end_pos
+            result = result[:detection.start_pos] + "[REDACTED]" + result[detection.end_pos:]
         
         return result
