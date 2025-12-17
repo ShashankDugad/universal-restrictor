@@ -9,24 +9,38 @@ Enterprise-grade detection for PII, toxicity, prompt injection, and finance comp
 | Detector | Description | Status |
 |----------|-------------|--------|
 | **PII Detection** | Email, phone, Aadhaar, PAN, bank accounts, IFSC, UPI, Demat, GST | ✅ |
-| **Toxicity Detection** | Hybrid: Keywords + Llama Guard 3 + Claude API (premium) | ✅ |
+| **Toxicity Detection** | Hybrid: Keywords + Escalation Classifier + Claude API | ✅ |
 | **Finance Intent** | Trading signals, insider info, investment advice | ✅ |
-| **Prompt Injection** | Jailbreak attempts, instruction override | ✅ |
+| **Prompt Injection** | Jailbreak attempts, instruction override, system markers | ✅ |
+
+## Security Features
+
+| Feature | Description |
+|---------|-------------|
+| **API Key Auth** | Environment-based keys, no hardcoded secrets |
+| **Rate Limiting** | Redis-based, works across instances |
+| **CORS** | Restricted to allowed origins |
+| **PII Masking** | Responses show `jo************om` not full PII |
+| **Audit Logging** | JSON structured logs, no raw PII stored |
+| **Input Sanitization** | Removes injection patterns before LLM calls |
+| **Error Sanitization** | No internal details leaked |
 
 ## Detection Pipeline
 ```
 Input Text
     │
-    ├─→ [PII Regex] ──────────────→ REDACT (fast, free)
-    ├─→ [Finance Regex] ──────────→ WARN/BLOCK (fast, free)
-    ├─→ [Prompt Injection] ───────→ BLOCK (fast, free)
+    ├─→ [Auth Check] ─────────────→ 401/403 if invalid
+    ├─→ [Rate Limit] ─────────────→ 429 if exceeded
+    │
+    ├─→ [PII Regex] ──────────────→ REDACT (fast, <5ms)
+    ├─→ [Finance Regex] ──────────→ WARN/BLOCK (fast, <5ms)
+    ├─→ [Prompt Injection] ───────→ BLOCK (fast, <5ms)
     │
     └─→ [Toxicity]
          ├─→ [Keywords] ──────────→ BLOCK obvious threats
-         │
-         └─→ [Escalation Classifier]
-              ├─→ Safe ───────────→ ALLOW (fast, free)
-              └─→ Suspicious ─────→ [Claude API] → BLOCK/ALLOW
+         └─→ [Escalation Classifier] → Suspicious?
+              ├─→ No  → ALLOW
+              └─→ Yes → [Sanitize] → [Claude API] → BLOCK/ALLOW
 ```
 
 **Cost:** ~$0.002 per 100 requests (only escalated cases hit Claude API)
@@ -42,18 +56,9 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Set API key (for premium detection)
-export ANTHROPIC_API_KEY="your-key-here"
-
-# Download Llama Guard 3 (optional, for local detection)
-python -c "
-from huggingface_hub import hf_hub_download
-hf_hub_download(
-    repo_id='mradermacher/Llama-Guard-3-8B-GGUF',
-    filename='Llama-Guard-3-8B.Q8_0.gguf',
-    local_dir='./models'
-)
-"
+# Configure (copy and edit)
+cp .env.example .env
+# Edit .env with your API keys
 
 # Run
 ./run.sh
@@ -61,13 +66,45 @@ hf_hub_download(
 
 API available at: http://localhost:8000/docs
 
+## Configuration
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `API_KEYS` | **Yes** | - | API keys (format: `key1:tenant1:tier1,key2:tenant2:tier2`) |
+| `ANTHROPIC_API_KEY` | No | - | Claude API for premium detection |
+| `CORS_ORIGINS` | No | - | Allowed origins (comma-separated) |
+| `REDIS_URL` | No | - | Redis for rate limiting & storage |
+| `RATE_LIMIT` | No | `60` | Requests per minute |
+| `AUDIT_LOG_FILE` | No | - | Path for JSON audit log file |
+| `LOG_FORMAT` | No | `text` | `text` or `json` |
+| `ENABLE_DOCS` | No | `true` | Enable Swagger UI |
+
+### Example .env
+```bash
+API_KEYS=sk-prod-abc123xyz789defg:acme-corp:pro,sk-test-123456789abcdef:demo:free
+ANTHROPIC_API_KEY=sk-ant-xxx
+CORS_ORIGINS=https://app.example.com,https://admin.example.com
+REDIS_URL=redis://localhost:6379/0
+RATE_LIMIT=60
+AUDIT_LOG_FILE=data/audit.log
+```
+
 ## API Usage
+
+### Authentication
+
+All endpoints (except `/health`) require API key:
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/analyze ...
+```
 
 ### Analyze Text
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: test-api-key-123" \
+  -H "X-API-Key: your-api-key" \
   -d '{"text": "Contact me at john@example.com"}'
 ```
 
@@ -76,15 +113,27 @@ curl -X POST http://localhost:8000/analyze \
 {
   "action": "redact",
   "request_id": "uuid",
-  "processing_time_ms": 15.2,
+  "processing_time_ms": 2.5,
   "summary": {
     "categories_found": ["pii_email"],
     "max_severity": "medium",
-    "max_confidence": 0.95
+    "max_confidence": 0.95,
+    "detection_count": 1
   },
-  "detections": [...],
+  "detections": [{
+    "category": "pii_email",
+    "matched_text": "jo************om",
+    "explanation": "Email address detected"
+  }],
   "redacted_text": "Contact me at [REDACTED]"
 }
+```
+
+### Response Headers
+```
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 59
+X-RateLimit-Reset: 60
 ```
 
 ### Actions
@@ -96,7 +145,19 @@ curl -X POST http://localhost:8000/analyze \
 | `redact` | PII detected, redacted version provided |
 | `block` | Dangerous content blocked |
 
-## Python SDK Usage
+## Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | No | Health check |
+| POST | `/analyze` | Yes | Analyze single text |
+| POST | `/analyze/batch` | Yes | Analyze up to 100 texts |
+| POST | `/feedback` | Yes | Submit feedback |
+| GET | `/feedback/stats` | Yes | Get feedback statistics |
+| GET | `/categories` | Yes | List detection categories |
+| GET | `/usage` | Yes | Claude API usage stats |
+
+## Python SDK
 ```python
 from restrictor import Restrictor, PolicyConfig
 
@@ -106,50 +167,36 @@ result = r.analyze("Contact me at john@example.com")
 print(result.action)        # Action.REDACT
 print(result.redacted_text) # "Contact me at [REDACTED]"
 
-# With custom policy
+# Custom policy
 policy = PolicyConfig(
     detect_pii=True,
     detect_toxicity=True,
     detect_prompt_injection=True,
     detect_finance_intent=True,
-    pii_types=["pii_email", "pii_phone"],
+    toxicity_threshold=0.7,
     pii_confidence_threshold=0.9,
     redact_replacement="[HIDDEN]",
 )
 r = Restrictor(policy=policy)
 
-# Disable Claude API (local-only detection)
+# Local-only mode (no Claude API)
 r = Restrictor(enable_claude=False)
 
-# Check API usage
-usage = r.get_api_usage()
-print(f"Cost: ${usage['total_cost_usd']}")
+# Check Claude API usage
+print(r.get_api_usage())
 ```
 
-## PolicyConfig Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `detect_pii` | bool | `True` | Enable PII detection |
-| `detect_toxicity` | bool | `True` | Enable toxicity detection |
-| `detect_prompt_injection` | bool | `True` | Enable prompt injection detection |
-| `detect_finance_intent` | bool | `True` | Enable finance intent detection |
-| `pii_types` | List[str] | `None` | Filter specific PII types (None = all) |
-| `pii_confidence_threshold` | float | `0.8` | Minimum confidence for PII |
-| `toxicity_threshold` | float | `0.7` | Minimum confidence for toxicity |
-| `redact_replacement` | str | `"[REDACTED]"` | Custom replacement text |
-
-## India Finance PII
+## India-Specific PII
 
 | Pattern | Example | Category |
 |---------|---------|----------|
-| Bank Account | `50100123456789` | `pii_bank_account` |
-| IFSC Code | `SBIN0001234` | `pii_ifsc` |
-| UPI ID | `name@okaxis` | `pii_upi` |
-| Demat Account | `IN12345678901234` | `pii_demat` |
-| GST Number | `27AAPFU0939F1ZV` | `pii_gst` |
 | Aadhaar | `2345 6789 0123` | `pii_aadhaar` |
 | PAN | `ABCDE1234F` | `pii_pan` |
+| Bank Account | `50100123456789` | `pii_bank_account` |
+| IFSC | `SBIN0001234` | `pii_ifsc` |
+| UPI ID | `name@okaxis` | `pii_upi` |
+| Demat | `IN12345678901234` | `pii_demat` |
+| GST | `27AAPFU0939F1ZV` | `pii_gst` |
 
 ## Finance Intent Detection
 
@@ -159,7 +206,7 @@ print(f"Cost: ${usage['total_cost_usd']}")
 | Insider Info | "Source told me merger coming" | `block` |
 | Investment Advice | "Guaranteed 50% returns" | `allow_with_warning` |
 
-## Subtle Threat Detection (Premium)
+## Subtle Threat Detection
 
 The escalation classifier + Claude API catches veiled threats:
 
@@ -168,62 +215,59 @@ The escalation classifier + Claude API catches veiled threats:
 | "Something bad might happen to you" | ✅ Violence |
 | "Those people are ruining our country" | ✅ Hate speech |
 | "Nobody would miss me" | ✅ Self-harm |
-| "You're mature for your age" | ✅ Grooming |
+| "I hate you" | ✅ Harassment |
 
-## Rate Limiting & Cost Control
-```python
-from restrictor.detectors.claude_detector import ClaudeDetector, RateLimitConfig
+## Audit Logging
 
-# Custom rate limits
-config = RateLimitConfig(
-    requests_per_minute=30,      # Max 30 Claude calls/min
-    daily_cost_cap_usd=1.0,      # $1/day max
-    max_tokens_per_request=300,  # Token limit per call
-)
-
-detector = ClaudeDetector(rate_limit=config)
+JSON structured logs for compliance:
+```json
+{
+  "timestamp": "2025-12-17T18:43:55.631559Z",
+  "event_type": "api_request",
+  "request_id": "e2b39097-a80b-4e60-944c-02f4a359829e",
+  "tenant_id": "acme-corp",
+  "input_hash": "41dba1879a951cd1b974ba852311dff...",
+  "input_length": 10,
+  "action": "block",
+  "categories": ["toxic_harassment"],
+  "confidence": 0.95,
+  "processing_time_ms": 2118.89,
+  "detectors_used": ["claude_haiku"]
+}
 ```
 
-## Environment Variables
+**No raw PII stored** - only hash and length.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | - | Claude API key (for premium detection) |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
+## Rate Limiting
 
-## Architecture
+- **Redis-based** - works across multiple instances
+- **Default**: 60 requests/minute per API key
+- **Headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+- **Fallback**: In-memory rate limiting if Redis unavailable
+
+## Input Sanitization
+
+Defense-in-depth for Claude API calls:
+
+| Pattern | Action |
+|---------|--------|
+| `<\|system\|>`, `[INST]` | Replaced with `[SYS]`, `[INST_REMOVED]` |
+| "Ignore all previous instructions" | Replaced with `[BLOCKED]` |
+| "Pretend to be" | Replaced with `[BLOCKED]` |
+| Null bytes, zero-width chars | Removed |
+
+## Docker
+```bash
+# Build
+docker build -t universal-restrictor .
+
+# Run
+docker run -p 8000:8000 \
+  -e API_KEYS="key:tenant:tier" \
+  -e ANTHROPIC_API_KEY="sk-ant-xxx" \
+  -e REDIS_URL="redis://host.docker.internal:6379/0" \
+  universal-restrictor
 ```
-┌─────────────────────────────────────────────────────┐
-│                Universal Restrictor                  │
-├─────────────────────────────────────────────────────┤
-│  API (FastAPI)                                       │
-│  ├── Rate Limiting (60 req/min)                     │
-│  ├── API Key Auth                                   │
-│  └── CORS enabled                                   │
-├─────────────────────────────────────────────────────┤
-│  Detectors                                          │
-│  ├── PII (Regex) - India-specific patterns          │
-│  ├── Toxicity (Hybrid)                              │
-│  │   ├── Keywords (fast, obvious threats)           │
-│  │   ├── Escalation Classifier (suspicious check)   │
-│  │   └── Claude API (premium, subtle threats)       │
-│  ├── Finance Intent (Pattern-based)                 │
-│  └── Prompt Injection (Pattern-based)               │
-├─────────────────────────────────────────────────────┤
-│  Storage                                            │
-│  ├── Redis (primary, persistent)                    │
-│  └── File (fallback)                                │
-└─────────────────────────────────────────────────────┘
-```
-
-## On-Premise Deployment
-
-Designed for banks and financial institutions:
-
-- **Local-only mode** - Set `enable_claude=False`
-- **No data leaves your network** - Llama Guard runs locally
-- **Docker ready** - `docker build -t restrictor .`
-- **Kubernetes ready** - Helm chart coming soon
 
 ## Accuracy
 
@@ -231,6 +275,7 @@ Designed for banks and financial institutions:
 |------------|----------|
 | Original 100 sentences | 100% |
 | Subtle threats (25 sentences) | 100% |
+| Injection attempts | 100% blocked |
 
 ## Development
 ```bash
@@ -240,9 +285,8 @@ pytest tests/
 # Run server with hot reload
 uvicorn restrictor.api.server:app --reload
 
-# Docker
-docker build -t universal-restrictor .
-docker run -p 8000:8000 -e ANTHROPIC_API_KEY=xxx universal-restrictor
+# Check audit log
+cat data/audit.log | jq .
 ```
 
 ## Roadmap
@@ -252,12 +296,15 @@ docker run -p 8000:8000 -e ANTHROPIC_API_KEY=xxx universal-restrictor
 - [x] Finance intent detection
 - [x] Prompt injection detection
 - [x] Claude API premium tier
-- [x] Rate limiting & cost control
-- [x] Redis storage
+- [x] Rate limiting (Redis)
+- [x] Structured audit logging
+- [x] Input sanitization
+- [x] API key authentication
+- [x] PII masking in responses
 - [ ] Kubernetes Helm chart
 - [ ] Admin dashboard
 - [ ] Hindi/Tamil/Telugu toxicity
-- [ ] ML-based PII (names, addresses)
+- [ ] Prometheus metrics
 
 ## License
 
