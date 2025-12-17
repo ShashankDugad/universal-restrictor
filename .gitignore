@@ -1,96 +1,46 @@
-# Byte-compiled / optimized / DLL files
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Environments
-.env
-.venv
-env/
 venv/
 ENV/
-env.bak/
-venv.bak/
+.venv/
 
-# IDEs
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
-*~
 
-# Jupyter
-.ipynb_checkpoints
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Models (large files)
-models/
-*.bin
-*.pt
-*.pth
-*.onnx
+# OS
+.DS_Store
+Thumbs.db
 
 # Logs
 *.log
 logs/
 
-# Local config
-.env.local
-config.local.yaml
+# Models (large files)
+models/*.gguf
+models/*.bin
 
-# OS
-.DS_Store
-Thumbs.db
-.env
-data/datasets/*.csv
+# Data
+data/*.json
+data/*.jsonl
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
