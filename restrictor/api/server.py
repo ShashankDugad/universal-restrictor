@@ -20,6 +20,7 @@ from ..models import PolicyConfig
 from ..feedback.storage import get_feedback_storage
 from ..feedback.models import FeedbackType, FeedbackRequest
 from .middleware import RateLimitMiddleware, require_api_key
+from .logging_config import get_audit_logger
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -255,6 +256,20 @@ async def analyze_text(
             explanation=d.explanation,
             detector=d.detector
         ))
+    
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_request(
+        request_id=result.request_id,
+        tenant_id=tenant.get("tenant_id") if tenant else "unknown",
+        input_hash=result.input_hash,
+        input_length=len(request.text),
+        action=result.action.value,
+        categories=[c.value for c in result.categories_found],
+        confidence=result.max_confidence,
+        processing_time_ms=result.processing_time_ms,
+        detectors_used=list(set(d.detector for d in result.detections))
+    )
     
     return AnalyzeResponse(
         action=result.action.value,

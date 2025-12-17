@@ -1,10 +1,14 @@
-"""
-API package for Universal Restrictor.
-
-Run the server with:
-    uvicorn restrictor.api.server:app --reload
-"""
+"""API package."""
 
 from .server import app
+from .middleware import get_auth, require_api_key, get_rate_limiter
+from .logging_config import get_audit_logger, AuditLogger
 
-__all__ = ["app"]
+__all__ = [
+    "app",
+    "get_auth",
+    "require_api_key",
+    "get_rate_limiter",
+    "get_audit_logger",
+    "AuditLogger",
+]
