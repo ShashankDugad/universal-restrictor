@@ -1,9 +1,9 @@
 """
-PII Detector - India Finance focused.
+PII Detector - Regex-based detection for personally identifiable information.
 """
 
 import re
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Optional
 
 from ..models import Detection, Category, Severity
 
@@ -35,7 +35,7 @@ PII_PATTERNS: Dict[Category, List[Tuple[str, str]]] = {
         (r'\b[A-Z]{5}\d{4}[A-Z]\b', "PAN number detected"),
     ],
     
-    # INDIA FINANCE
+    # India Finance
     Category.PII_BANK_ACCOUNT: [
         (r'(?i)(?:account|a/c|ac|acct)[-.\s]*(?:no|number|#)?[-.\s:]*(\d{9,18})', "Bank account number detected"),
         (r'\b(\d{11,18})\b', "Potential bank account number detected"),
@@ -58,7 +58,7 @@ PII_PATTERNS: Dict[Category, List[Tuple[str, str]]] = {
         (r'\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b', "GST number detected"),
     ],
     
-    # API KEYS
+    # API Keys
     Category.PII_API_KEY: [
         (r'(?i)(?:password|passwd|pwd|secret|token|api_key|apikey)\s*[:=]\s*["\']?([^\s"\']{8,})["\']?', "Secret detected"),
         (r'\b(sk-[a-zA-Z0-9_-]{20,})\b', "OpenAI API key detected"),
@@ -91,6 +91,8 @@ PII_SEVERITY: Dict[Category, Severity] = {
 
 
 class PIIDetector:
+    """Detect PII using regex patterns."""
+    
     def __init__(self):
         self.name = "pii_regex"
         self._compiled_patterns: Dict[Category, List[Tuple[re.Pattern, str]]] = {}
@@ -102,10 +104,11 @@ class PIIDetector:
             ]
     
     def detect(self, text: str, categories: List[Category] = None) -> List[Detection]:
+        """Detect PII in text."""
         detections = []
         categories_to_check = categories or list(self._compiled_patterns.keys())
         
-        # First pass: find all UPI IDs to exclude from phone detection
+        # Find UPI positions first to avoid phone false positives
         upi_positions: Set[Tuple[int, int]] = set()
         if Category.PII_UPI in self._compiled_patterns:
             for pattern, _ in self._compiled_patterns[Category.PII_UPI]:
@@ -126,17 +129,16 @@ class PIIDetector:
                     if len(matched_text) < 4:
                         continue
                     
-                    # Skip phone if it's part of UPI
+                    # Skip phone if part of UPI
                     if category == Category.PII_PHONE:
-                        is_upi = False
-                        for upi_start, upi_end in upi_positions:
-                            if match.start() >= upi_start and match.end() <= upi_end:
-                                is_upi = True
-                                break
+                        is_upi = any(
+                            match.start() >= upi_start and match.end() <= upi_end
+                            for upi_start, upi_end in upi_positions
+                        )
                         if is_upi:
                             continue
                     
-                    # Skip phone-like numbers for bank account
+                    # Skip phone-like bank accounts
                     if category == Category.PII_BANK_ACCOUNT:
                         if len(matched_text) == 10 and matched_text[0] in '6789':
                             continue
@@ -152,7 +154,7 @@ class PIIDetector:
                         detector=self.name
                     ))
         
-        # Deduplicate by matched_text + category
+        # Deduplicate
         seen = set()
         unique = []
         for d in detections:
@@ -163,17 +165,31 @@ class PIIDetector:
         
         return unique
     
-    def redact(self, text: str, detections: List[Detection] = None) -> str:
+    def redact(
+        self, 
+        text: str, 
+        detections: List[Detection] = None,
+        replacement: str = "[REDACTED]"
+    ) -> str:
+        """
+        Redact PII from text.
+        
+        Args:
+            text: Original text
+            detections: Pre-computed detections (optional)
+            replacement: Replacement string (default: [REDACTED])
+        """
         if detections is None:
             detections = self.detect(text)
         
         if not detections:
             return text
         
+        # Sort by position (reverse) to replace from end to start
         sorted_detections = sorted(detections, key=lambda d: d.start_pos, reverse=True)
         
         result = text
         for d in sorted_detections:
-            result = result[:d.start_pos] + "[REDACTED]" + result[d.end_pos:]
+            result = result[:d.start_pos] + replacement + result[d.end_pos:]
         
         return result

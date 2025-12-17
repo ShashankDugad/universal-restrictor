@@ -74,6 +74,51 @@ curl -X POST http://localhost:8000/analyze \
 | `redact` | PII detected, redacted version provided |
 | `block` | Dangerous content (toxicity, insider info, prompt injection) |
 
+## Python SDK Usage
+```python
+from restrictor import Restrictor, PolicyConfig
+
+# Basic usage
+r = Restrictor()
+result = r.analyze("Contact me at john@example.com")
+print(result.action)  # Action.REDACT
+print(result.redacted_text)  # "Contact me at [REDACTED]"
+
+# With custom policy
+policy = PolicyConfig(
+    detect_pii=True,
+    detect_toxicity=True,
+    detect_prompt_injection=True,
+    detect_finance_intent=True,
+    pii_types=["pii_email", "pii_phone"],  # Filter specific PII types
+    pii_confidence_threshold=0.9,
+    redact_replacement="[HIDDEN]",  # Custom replacement text
+)
+r = Restrictor(policy=policy)
+
+# Or use 'config' alias
+r = Restrictor(config=policy)
+
+# Convert to dictionary
+result_dict = result.to_dict()
+```
+
+## PolicyConfig Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `detect_pii` | bool | `True` | Enable PII detection |
+| `detect_toxicity` | bool | `True` | Enable toxicity detection |
+| `detect_prompt_injection` | bool | `True` | Enable prompt injection detection |
+| `detect_finance_intent` | bool | `True` | Enable finance intent detection |
+| `pii_types` | List[str] | `None` | Filter specific PII types (None = all) |
+| `pii_confidence_threshold` | float | `0.8` | Minimum confidence for PII |
+| `toxicity_threshold` | float | `0.7` | Minimum confidence for toxicity |
+| `redact_replacement` | str | `"[REDACTED]"` | Custom replacement text |
+| `pii_action` | Action | `REDACT` | Action for PII detections |
+| `toxicity_action` | Action | `BLOCK` | Action for toxicity |
+| `prompt_injection_action` | Action | `BLOCK` | Action for prompt injection |
+
 ## India Finance PII (Unique)
 
 | Pattern | Example | Category |
@@ -126,38 +171,17 @@ Designed for banks and financial institutions:
 - **Docker ready** - `docker build -t restrictor .`
 - **Kubernetes ready** - Helm chart coming soon
 
-## Configuration
-
-### Environment Variables
+## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
 | `GROQ_API_KEY` | - | Optional: Groq API for cloud toxicity |
 
-### Policy Configuration
-```python
-from restrictor import Restrictor, PolicyConfig
-
-policy = PolicyConfig(
-    detect_pii=True,
-    detect_toxicity=True,
-    detect_prompt_injection=True,
-    detect_finance_intent=True,
-    toxicity_threshold=0.7,
-    pii_confidence_threshold=0.8,
-    pii_types=["pii_email", "pii_phone"],  # Optional filter
-)
-
-r = Restrictor(policy=policy)
-result = r.analyze("Your text here")
-```
-
 ## Feedback Loop
 
 Submit feedback to improve detection:
 ```bash
-# After analyzing, submit feedback
 curl -X POST http://localhost:8000/feedback \
   -H "Content-Type: application/json" \
   -d '{
@@ -181,6 +205,15 @@ uvicorn restrictor.api.server:app --reload
 docker build -t universal-restrictor .
 docker run -p 8000:8000 universal-restrictor
 ```
+
+## Roadmap
+
+- [ ] Hindi/Tamil/Telugu toxicity detection
+- [ ] ML-based PII detection (names, addresses)
+- [ ] Custom model fine-tuning
+- [ ] Async API
+- [ ] OpenTelemetry integration
+- [ ] Kubernetes Helm chart
 
 ## License
 

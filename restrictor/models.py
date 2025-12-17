@@ -96,6 +96,20 @@ class Detection:
             "explanation": self.explanation,
             "detector": self.detector,
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Detection":
+        """Create from dictionary."""
+        return cls(
+            category=Category(data["category"]),
+            severity=Severity(data["severity"]),
+            confidence=data["confidence"],
+            matched_text=data["matched_text"],
+            start_pos=data["start_pos"],
+            end_pos=data["end_pos"],
+            explanation=data["explanation"],
+            detector=data["detector"],
+        )
 
 
 @dataclass
@@ -117,20 +131,37 @@ class Decision:
         return {
             "action": self.action.value,
             "request_id": self.request_id,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "processing_time_ms": self.processing_time_ms,
+            "input_hash": self.input_hash,
             "categories_found": [c.value for c in self.categories_found],
             "max_severity": self.max_severity.value if self.max_severity else None,
             "max_confidence": self.max_confidence,
             "redacted_text": self.redacted_text,
             "detections": [d.to_dict() for d in self.detections],
-            "input_hash": self.input_hash,
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Decision":
+        """Create from dictionary."""
+        return cls(
+            action=Action(data["action"]),
+            detections=[Detection.from_dict(d) for d in data.get("detections", [])],
+            input_hash=data.get("input_hash", ""),
+            request_id=data.get("request_id", str(uuid.uuid4())),
+            timestamp=datetime.fromisoformat(data["timestamp"]) if data.get("timestamp") else datetime.utcnow(),
+            processing_time_ms=data.get("processing_time_ms", 0.0),
+            categories_found=[Category(c) for c in data.get("categories_found", [])],
+            max_severity=Severity(data["max_severity"]) if data.get("max_severity") else None,
+            max_confidence=data.get("max_confidence", 0.0),
+            redacted_text=data.get("redacted_text"),
+        )
 
 
 @dataclass
 class PolicyConfig:
     """Configuration for detection policies."""
+    
     # Detection toggles
     detect_pii: bool = True
     detect_toxicity: bool = True
@@ -140,18 +171,22 @@ class PolicyConfig:
     # Thresholds
     toxicity_threshold: float = 0.7
     pii_confidence_threshold: float = 0.8
+    prompt_injection_threshold: float = 0.8
     
-    # PII types to detect (None = all)
-    pii_types: Optional[List[str]] = None
+    # PII configuration
+    pii_types: Optional[List[str]] = None  # None = all types
+    redact_replacement: str = "[REDACTED]"  # Custom replacement text
     
-    # Actions
+    # Actions per category
     pii_action: Action = Action.REDACT
     toxicity_action: Action = Action.BLOCK
     prompt_injection_action: Action = Action.BLOCK
+    finance_intent_action: Action = Action.ALLOW_WITH_WARNING
     
     # Custom rules
     blocked_terms: List[str] = field(default_factory=list)
     allowed_domains: List[str] = field(default_factory=list)
+    custom_patterns: Dict[str, str] = field(default_factory=dict)  # name -> regex
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -162,10 +197,36 @@ class PolicyConfig:
             "detect_finance_intent": self.detect_finance_intent,
             "toxicity_threshold": self.toxicity_threshold,
             "pii_confidence_threshold": self.pii_confidence_threshold,
+            "prompt_injection_threshold": self.prompt_injection_threshold,
             "pii_types": self.pii_types,
+            "redact_replacement": self.redact_replacement,
             "pii_action": self.pii_action.value,
             "toxicity_action": self.toxicity_action.value,
             "prompt_injection_action": self.prompt_injection_action.value,
+            "finance_intent_action": self.finance_intent_action.value,
             "blocked_terms": self.blocked_terms,
             "allowed_domains": self.allowed_domains,
+            "custom_patterns": self.custom_patterns,
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PolicyConfig":
+        """Create from dictionary."""
+        return cls(
+            detect_pii=data.get("detect_pii", True),
+            detect_toxicity=data.get("detect_toxicity", True),
+            detect_prompt_injection=data.get("detect_prompt_injection", True),
+            detect_finance_intent=data.get("detect_finance_intent", True),
+            toxicity_threshold=data.get("toxicity_threshold", 0.7),
+            pii_confidence_threshold=data.get("pii_confidence_threshold", 0.8),
+            prompt_injection_threshold=data.get("prompt_injection_threshold", 0.8),
+            pii_types=data.get("pii_types"),
+            redact_replacement=data.get("redact_replacement", "[REDACTED]"),
+            pii_action=Action(data.get("pii_action", "redact")),
+            toxicity_action=Action(data.get("toxicity_action", "block")),
+            prompt_injection_action=Action(data.get("prompt_injection_action", "block")),
+            finance_intent_action=Action(data.get("finance_intent_action", "allow_with_warning")),
+            blocked_terms=data.get("blocked_terms", []),
+            allowed_domains=data.get("allowed_domains", []),
+            custom_patterns=data.get("custom_patterns", {}),
+        )
