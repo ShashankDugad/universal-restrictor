@@ -17,6 +17,7 @@ PII_PATTERNS: Dict[Category, List[Tuple[str, str]]] = {
     Category.PII_PHONE: [
         (r'\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b', "US phone number detected"),
         (r'(?<!\d)(?:\+91[-.\s]?)?[6-9]\d{9}(?![@\d])', "Indian phone number detected"),
+        (r'(?<!\d)(?:\+91[-.\s]?)?[6-9]\d{4}[-.\s]?\d{5}(?![@\d])', "Indian phone number (spaced) detected"),
     ],
     
     Category.PII_CREDIT_CARD: [
@@ -58,14 +59,20 @@ PII_PATTERNS: Dict[Category, List[Tuple[str, str]]] = {
         (r'\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b', "GST number detected"),
     ],
     
-    # API Keys
+    # API Keys and Secrets
     Category.PII_API_KEY: [
-        (r'(?i)(?:password|passwd|pwd|secret|token|api_key|apikey)\s*[:=]\s*["\']?([^\s"\']{8,})["\']?', "Secret detected"),
-        (r'\b(sk-[a-zA-Z0-9_-]{20,})\b', "OpenAI API key detected"),
+        (r'\b(sk-[a-zA-Z0-9_-]{16,})\b', "OpenAI API key detected"),
         (r'\b(AKIA[0-9A-Z]{16})\b', "AWS Access Key detected"),
         (r'\b(ghp_[a-zA-Z0-9]{36})\b', "GitHub token detected"),
         (r'\b(gsk_[a-zA-Z0-9]{20,})\b', "Groq API key detected"),
         (r'\b(rzp_(?:live|test)_[a-zA-Z0-9]{14,})\b', "Razorpay key detected"),
+        (r'(?i)api[_-]?key[:\s=]+["\']?([a-zA-Z0-9_-]{16,})["\']?', "API key detected"),
+        (r'(?i)(?:api[_-]?key|apikey)[:\s]+([a-zA-Z0-9_-]{10,})', "API key detected"),
+    ],
+    
+    Category.PII_PASSWORD: [
+        (r'(?i)(?:password|passwd|pwd)\s*(?:is\s*)?[:\s=]+["\']?([^\s"\']{6,})["\']?', "Password detected"),
+        (r'(?i)(?:secret|token)\s*(?:is\s*)?[:\s=]+["\']?([^\s"\']{8,})["\']?', "Secret detected"),
     ],
     
     Category.PII_IP_ADDRESS: [
@@ -81,6 +88,7 @@ PII_SEVERITY: Dict[Category, Severity] = {
     Category.PII_AADHAAR: Severity.CRITICAL,
     Category.PII_PAN: Severity.HIGH,
     Category.PII_API_KEY: Severity.CRITICAL,
+    Category.PII_PASSWORD: Severity.CRITICAL,
     Category.PII_IP_ADDRESS: Severity.LOW,
     Category.PII_BANK_ACCOUNT: Severity.CRITICAL,
     Category.PII_IFSC: Severity.MEDIUM,
@@ -171,21 +179,13 @@ class PIIDetector:
         detections: List[Detection] = None,
         replacement: str = "[REDACTED]"
     ) -> str:
-        """
-        Redact PII from text.
-        
-        Args:
-            text: Original text
-            detections: Pre-computed detections (optional)
-            replacement: Replacement string (default: [REDACTED])
-        """
+        """Redact PII from text."""
         if detections is None:
             detections = self.detect(text)
         
         if not detections:
             return text
         
-        # Sort by position (reverse) to replace from end to start
         sorted_detections = sorted(detections, key=lambda d: d.start_pos, reverse=True)
         
         result = text

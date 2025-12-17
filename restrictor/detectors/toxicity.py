@@ -4,7 +4,7 @@ Toxicity Detector - Hybrid approach: Keywords + Llama Guard 3.
 Strategy:
 1. Fast keyword check for obvious threats (high confidence)
 2. Llama Guard for nuanced/borderline cases
-3. Combined result for best accuracy
+3. Skip LLM for finance/PII text (handled by other detectors)
 """
 
 import os
@@ -23,7 +23,7 @@ LLAMA_GUARD_CATEGORIES = {
     "S4": ("hate", Category.TOXIC_HATE, Severity.CRITICAL),
     "S5": ("defamation", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
     "S6": ("specialized_advice", Category.TOXIC_HARASSMENT, Severity.LOW),
-    "S7": ("privacy", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
+    # S7 = privacy - we handle PII separately, skip this
     "S8": ("intellectual_property", Category.TOXIC_HARASSMENT, Severity.LOW),
     "S9": ("indiscriminate_weapons", Category.TOXIC_VIOLENCE, Severity.CRITICAL),
     "S10": ("hate", Category.TOXIC_HATE, Severity.CRITICAL),
@@ -32,13 +32,21 @@ LLAMA_GUARD_CATEGORIES = {
     "S13": ("elections", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
 }
 
-# Finance patterns to skip (handled by finance detector)
-FINANCE_PATTERNS = [
-    r'(?i)\b(buy|sell|target|nifty|sensex|reliance|tcs|hdfcbank|infy|stock|share|trading)\b',
-    r'(?i)\b(loan|emi|interest|credit|account|bank|upi|ifsc)\b',
+# Skip LLM for these patterns (handled by other detectors)
+SKIP_LLM_PATTERNS = [
+    # Finance
+    r'(?i)\b(buy|sell|target|nifty|sensex|reliance|tcs|hdfcbank|infy|stock|share|trading|bullish|bearish)\b',
+    r'(?i)\b(loan|emi|interest|credit|account|bank|upi|ifsc|demat|gst)\b',
+    r'(?i)\b(guaranteed|assured|returns|invest|profit|double.*money)\b',
+    # PII indicators
+    r'(?i)\b(email|phone|aadhaar|pan|password|api.?key|ssn|credit.?card)\b',
+    r'@[a-zA-Z]+\.(com|org|net|in)',  # Email domains
+    r'@(okaxis|ybl|paytm|okhdfcbank)',  # UPI
+    r'\b[A-Z]{4}0[A-Z0-9]{6}\b',  # IFSC
+    r'\b\d{12}\b',  # Aadhaar-like
 ]
 
-# High-confidence threat patterns (catches what Llama Guard misses)
+# High-confidence threat patterns
 THREAT_PATTERNS: List[Tuple[str, Category, Severity, str]] = [
     # Direct violence threats
     (r'(?i)\b(i\s+will\s+kill\s+you|i\'?m\s+going\s+to\s+kill\s+you|gonna\s+kill\s+you)', 
@@ -47,27 +55,39 @@ THREAT_PATTERNS: List[Tuple[str, Category, Severity, str]] = [
      Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Murder threat"),
     (r'(?i)\b(kill\s+yourself|kys\b|go\s+die)', 
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Encouraging self-harm"),
-    (r'(?i)\b(i\s+will\s+shoot|i\'?m\s+going\s+to\s+shoot|gonna\s+shoot)\s+(you|him|her|them)', 
+    (r'(?i)\b(i\s+will\s+shoot|i\'?m\s+going\s+to\s+shoot|gonna\s+shoot)\s*(you|him|her|them)?', 
      Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Shooting threat"),
     (r'(?i)\b(i\s+will\s+stab|i\'?m\s+going\s+to\s+stab|gonna\s+stab)', 
      Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Stabbing threat"),
-    (r'(?i)\b(i\s+will\s+hurt|i\'?m\s+going\s+to\s+hurt|gonna\s+hurt)\s+(you|him|her|them)', 
+    (r'(?i)\b(i\s+will\s+hurt|i\'?m\s+going\s+to\s+hurt|gonna\s+hurt)\s*(you|him|her|them)', 
      Category.TOXIC_VIOLENCE, Severity.HIGH, "Threat of physical harm"),
-    (r'(?i)\b(beat\s+you\s+up|kick\s+your\s+ass|smash\s+your\s+face)', 
+    (r'(?i)\b(beat\s+(you|them)\s+up|kick\s+your\s+ass|smash\s+your\s+face)', 
      Category.TOXIC_VIOLENCE, Severity.HIGH, "Physical violence threat"),
+    (r'(?i)\b(i\'?ll\s+smash|gonna\s+smash)\s+(your|his|her)', 
+     Category.TOXIC_VIOLENCE, Severity.HIGH, "Physical violence threat"),
+    (r'(?i)\b(destroy\s+your\s+family|kill\s+your.*family)', 
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Family threat"),
+    (r'(?i)\bgonna\s+kill\s+(your|his|her)', 
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Death threat"),
     
     # Hate speech
     (r'(?i)\b(hate\s+all|eliminate\s+all|exterminate\s+all|kill\s+all)\s+\w+', 
      Category.TOXIC_HATE, Severity.CRITICAL, "Group hatred/genocide"),
-    (r'(?i)\b(should\s+be\s+eliminated|should\s+all\s+die|deserve\s+to\s+die)', 
+    (r'(?i)\b(should\s+(all\s+)?be\s+eliminated|should\s+all\s+die|deserve\s+to\s+die)', 
      Category.TOXIC_HATE, Severity.CRITICAL, "Dehumanizing speech"),
+    (r'(?i)\b(they\s+should.*eliminated|all.*eliminated)', 
+     Category.TOXIC_HATE, Severity.CRITICAL, "Elimination rhetoric"),
     (r'(?i)\b(subhuman|inferior\s+race|master\s+race)', 
      Category.TOXIC_HATE, Severity.CRITICAL, "Racial supremacy"),
+    (r'(?i)\b(you\s+subhuman)', 
+     Category.TOXIC_HATE, Severity.CRITICAL, "Dehumanizing slur"),
+    (r'(?i)\bexterminate\s+(all|them)', 
+     Category.TOXIC_HATE, Severity.CRITICAL, "Genocide language"),
     
     # Self-harm
     (r'(?i)\b(want\s+to\s+die|want\s+to\s+kill\s+myself|end\s+my\s+life)', 
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Suicidal ideation"),
-    (r'(?i)\b(how\s+to\s+commit\s+suicide|best\s+way\s+to\s+die|painless\s+death)', 
+    (r'(?i)\b(how\s+to\s+commit\s+suicide|best\s+way\s+to\s+(die|suicide)|painless\s+death)', 
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Seeking suicide methods"),
     
     # Weapons
@@ -90,7 +110,6 @@ def get_llm():
     if _model_instance is not None:
         return _model_instance
     
-    # Try Q8 first (better), then Q4
     model_paths = [
         os.path.join(os.path.dirname(__file__), "..", "..", "models", "Llama-Guard-3-8B.Q8_0.gguf"),
         os.path.join(os.path.dirname(__file__), "..", "..", "models", "Llama-Guard-3-8B.Q4_K_M.gguf"),
@@ -127,21 +146,19 @@ def get_llm():
 
 
 class ToxicityDetector:
-    """
-    Hybrid toxicity detection: Keywords + Llama Guard.
-    """
+    """Hybrid toxicity detection: Keywords + Llama Guard."""
     
     def __init__(self):
         self.name = "toxicity_hybrid"
-        self._finance_patterns = [re.compile(p) for p in FINANCE_PATTERNS]
+        self._skip_patterns = [re.compile(p) for p in SKIP_LLM_PATTERNS]
         self._threat_patterns = [
             (re.compile(pattern), category, severity, explanation)
             for pattern, category, severity, explanation in THREAT_PATTERNS
         ]
     
-    def _is_finance_text(self, text: str) -> bool:
-        """Check if text is finance-related."""
-        for pattern in self._finance_patterns:
+    def _should_skip_llm(self, text: str) -> bool:
+        """Check if text should skip LLM (handled by other detectors)."""
+        for pattern in self._skip_patterns:
             if pattern.search(text):
                 return True
         return False
@@ -156,7 +173,7 @@ class ToxicityDetector:
                 detections.append(Detection(
                     category=category,
                     severity=severity,
-                    confidence=0.98,  # High confidence for explicit patterns
+                    confidence=0.98,
                     matched_text=match.group(0),
                     start_pos=match.start(),
                     end_pos=match.end(),
@@ -217,10 +234,12 @@ Provide your safety assessment for User in the above conversation:
                 for word in line.replace(',', ' ').split():
                     word = word.strip().upper()
                     if word.startswith('S') and len(word) <= 3 and word[1:].isdigit():
-                        categories.append(word)
+                        # Skip S7 (privacy) - we handle PII separately
+                        if word != "S7":
+                            categories.append(word)
             
             if not categories:
-                categories = ['S10']
+                return []  # Only S7 was detected, skip
             
             for cat in categories:
                 if cat in LLAMA_GUARD_CATEGORIES:
@@ -229,7 +248,7 @@ Provide your safety assessment for User in the above conversation:
                     detections.append(Detection(
                         category=our_category,
                         severity=severity,
-                        confidence=0.90,  # Slightly lower confidence for LLM
+                        confidence=0.90,
                         matched_text=text[:100] + "..." if len(text) > 100 else text,
                         start_pos=0,
                         end_pos=len(text),
@@ -240,29 +259,20 @@ Provide your safety assessment for User in the above conversation:
         return detections
     
     def detect(self, text: str, threshold: float = 0.5) -> List[Detection]:
-        """
-        Detect toxic content using hybrid approach.
-        
-        1. Skip finance-related text
-        2. Run keyword detection (fast, high precision)
-        3. Run LLM detection (covers edge cases)
-        4. Combine and deduplicate
-        """
-        # Skip finance text
-        if self._is_finance_text(text):
-            return []
-        
+        """Detect toxic content using hybrid approach."""
         all_detections = []
         
         # Fast keyword detection first
         keyword_detections = self._keyword_detect(text)
         all_detections.extend(keyword_detections)
         
-        # If keywords found critical threats, no need for LLM
+        # If keywords found critical threats, skip LLM
         has_critical = any(d.severity == Severity.CRITICAL for d in keyword_detections)
         
-        if not has_critical:
-            # Run LLM for nuanced detection
+        # Skip LLM for finance/PII text (handled by other detectors)
+        should_skip = self._should_skip_llm(text)
+        
+        if not has_critical and not should_skip:
             llm_detections = self._llm_detect(text)
             all_detections.extend(llm_detections)
         

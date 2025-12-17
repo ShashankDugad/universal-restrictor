@@ -1,9 +1,19 @@
 """
 Main Restrictor engine - orchestrates all detectors.
+
+Detection Pipeline:
+1. PII Detection (regex) - fast
+2. Finance Intent Detection (regex) - fast
+3. Prompt Injection Detection (regex) - fast
+4. Toxicity Detection:
+   a. Keywords (obvious threats) - fast
+   b. Escalation Classifier (suspicious patterns) - fast
+   c. Claude API (only if escalated) - premium
 """
 
 import hashlib
 import time
+import logging
 from typing import List, Optional
 from datetime import datetime
 
@@ -12,6 +22,10 @@ from .models import (
 )
 from .detectors import PIIDetector, ToxicityDetector, PromptInjectionDetector, FinanceIntentDetector
 from .detectors.toxicity import get_llm
+from .detectors.escalation_classifier import EscalationClassifier
+from .detectors.claude_detector import ClaudeDetector
+
+logger = logging.getLogger(__name__)
 
 
 class Restrictor:
@@ -19,11 +33,16 @@ class Restrictor:
     Main engine for content restriction and safety.
     
     Args:
-        policy: PolicyConfig for detection settings (also accepts 'config' alias)
+        policy: PolicyConfig for detection settings
+        enable_claude: Enable Claude API for premium detection (default: True if key exists)
     """
     
-    def __init__(self, policy: PolicyConfig = None, config: PolicyConfig = None):
-        # Support both 'policy' and 'config' parameter names
+    def __init__(
+        self, 
+        policy: PolicyConfig = None, 
+        config: PolicyConfig = None,
+        enable_claude: bool = None
+    ):
         self.policy = policy or config or PolicyConfig()
         
         # Pre-load Llama Guard model
@@ -34,70 +53,83 @@ class Restrictor:
         self.toxicity_detector = ToxicityDetector()
         self.prompt_injection_detector = PromptInjectionDetector()
         self.finance_detector = FinanceIntentDetector()
+        
+        # Escalation pipeline
+        self.escalation_classifier = EscalationClassifier()
+        self.claude_detector = ClaudeDetector()
+        
+        # Auto-enable Claude if API key exists
+        if enable_claude is None:
+            self.enable_claude = self.claude_detector.is_available()
+        else:
+            self.enable_claude = enable_claude and self.claude_detector.is_available()
+        
+        if self.enable_claude:
+            logger.info("Claude API enabled for premium detection")
+        else:
+            logger.info("Claude API disabled - using local detection only")
     
     def analyze(self, text: str, context: Optional[dict] = None, policy: PolicyConfig = None) -> Decision:
-        """
-        Analyze text and return a decision.
-        
-        Args:
-            text: Text to analyze
-            context: Optional context (user_id, conversation_id, etc.)
-            policy: Optional policy override for this request
-            
-        Returns:
-            Decision object with action, detections, and metadata
-        """
+        """Analyze text and return a decision."""
         start_time = time.time()
         
-        # Use provided policy or instance default
         policy = policy or self.policy
         
         all_detections: List[Detection] = []
         pii_detections: List[Detection] = []
         
-        # Run PII detection
+        # 1. Run PII detection first
         if policy.detect_pii:
             pii_detections = self.pii_detector.detect(text)
-            
-            # Filter by confidence threshold
             pii_detections = [
                 d for d in pii_detections 
                 if d.confidence >= policy.pii_confidence_threshold
             ]
-            
-            # Filter by PII types if specified
             if policy.pii_types:
                 pii_detections = [
                     d for d in pii_detections 
                     if d.category.value in policy.pii_types
                 ]
-            
             all_detections.extend(pii_detections)
         
-        # Run toxicity detection
-        if policy.detect_toxicity:
-            toxicity_detections = self.toxicity_detector.detect(
-                text, 
-                threshold=policy.toxicity_threshold
-            )
-            all_detections.extend(toxicity_detections)
-        
-        # Run prompt injection detection
+        # 2. Run prompt injection detection
         if policy.detect_prompt_injection:
             injection_detections = self.prompt_injection_detector.detect(text)
-            # Filter by threshold
             injection_detections = [
                 d for d in injection_detections
                 if d.confidence >= policy.prompt_injection_threshold
             ]
             all_detections.extend(injection_detections)
         
-        # Run finance intent detection
+        # 3. Run finance intent detection
         if policy.detect_finance_intent:
             finance_detections = self.finance_detector.detect(text)
             all_detections.extend(finance_detections)
         
-        # Determine action based on detections and policy
+        # 4. Run toxicity detection (skip if PII/finance found)
+        has_pii = len(pii_detections) > 0
+        has_finance = any(d.category.value.startswith('finance_') for d in all_detections)
+        
+        if policy.detect_toxicity and not has_pii and not has_finance:
+            # 4a. Try keyword detection first (fast)
+            toxicity_detections = self.toxicity_detector.detect(
+                text, 
+                threshold=policy.toxicity_threshold
+            )
+            
+            # 4b. If no keyword hits, check escalation classifier
+            if not toxicity_detections:
+                escalation = self.escalation_classifier.classify(text)
+                
+                if escalation.needs_escalation and self.enable_claude:
+                    # 4c. Use Claude API for suspicious text
+                    context_str = f"Triggered patterns: {escalation.triggered_patterns}"
+                    claude_detections = self.claude_detector.detect(text, context=context_str)
+                    toxicity_detections.extend(claude_detections)
+            
+            all_detections.extend(toxicity_detections)
+        
+        # Determine action
         action = self._determine_action(all_detections, policy)
         
         # Generate redacted text if needed
@@ -153,17 +185,16 @@ class Restrictor:
         if not detections:
             return Action.ALLOW
         
-        # Check for blocking conditions first (highest priority)
+        # Check for blocking conditions first
         for d in detections:
-            # Prompt injection
             if d.category in [Category.PROMPT_INJECTION, Category.JAILBREAK_ATTEMPT]:
                 return policy.prompt_injection_action
             
-            # Toxicity
-            if d.category in [Category.TOXIC_HATE, Category.TOXIC_VIOLENCE, Category.TOXIC_SELF_HARM]:
+            if d.category in [Category.TOXIC_HATE, Category.TOXIC_VIOLENCE, 
+                              Category.TOXIC_SELF_HARM, Category.TOXIC_HARASSMENT,
+                              Category.TOXIC_SEXUAL]:
                 return policy.toxicity_action
             
-            # Insider info (always block)
             if d.category == Category.FINANCE_INSIDER_INFO:
                 return Action.BLOCK
         
@@ -181,7 +212,6 @@ class Restrictor:
         if has_pii:
             return policy.pii_action
         
-        # Default for other detections
         if detections:
             return Action.ALLOW_WITH_WARNING
         
@@ -190,3 +220,7 @@ class Restrictor:
     def analyze_batch(self, texts: List[str], policy: PolicyConfig = None) -> List[Decision]:
         """Analyze multiple texts."""
         return [self.analyze(text, policy=policy) for text in texts]
+    
+    def get_api_usage(self) -> dict:
+        """Get Claude API usage stats."""
+        return self.claude_detector.get_cost_estimate()

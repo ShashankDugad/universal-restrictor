@@ -1,185 +1,139 @@
 """
-Finance Intent Detector - Detects trading signals, insider info, investment advice.
-
-This is NOVEL and hard to copy - requires domain expertise.
-
-Detects:
-- Trading intent (buy/sell recommendations)
-- Potential insider information
-- Unregistered investment advice
-- Loan/credit discussions
+Finance Intent Detector - Detects trading intent, insider info, investment advice.
 """
 
 import re
-from typing import List, Dict, Tuple
+from typing import List, Tuple
 
 from ..models import Detection, Category, Severity
 
 
-# Stock symbols - NSE/BSE top stocks
-STOCK_SYMBOLS = {
-    'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR',
-    'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK', 'LT', 'AXISBANK',
-    'ASIANPAINT', 'MARUTI', 'TITAN', 'SUNPHARMA', 'BAJFINANCE',
-    'WIPRO', 'HCLTECH', 'ULTRACEMCO', 'ONGC', 'NTPC', 'POWERGRID',
-    'TATAMOTORS', 'TATASTEEL', 'JSWSTEEL', 'ADANIENT', 'ADANIPORTS',
-    'BAJAJFINSV', 'TECHM', 'INDUSINDBK', 'HINDALCO', 'COALINDIA',
-    'NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY',
-}
+# Stock symbols
+STOCK_SYMBOLS = [
+    'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL',
+    'KOTAKBANK', 'AXISBANK', 'TATAMOTORS', 'WIPRO', 'MARUTI', 'TATASTEEL',
+    'ADANIPORTS', 'POWERGRID', 'NTPC', 'SUNPHARMA', 'ULTRACEMCO', 'TECHM',
+    'HINDUNILVR', 'BAJFINANCE', 'ASIANPAINT', 'NIFTY', 'BANKNIFTY', 'SENSEX'
+]
 
-# Index names
-INDEX_NAMES = {'NIFTY', 'SENSEX', 'BANKNIFTY', 'NIFTY50', 'FINNIFTY', 'MIDCAP'}
+STOCK_PATTERN = '|'.join(STOCK_SYMBOLS)
 
-FINANCE_INTENT_PATTERNS: Dict[Category, List[Tuple[str, str, float]]] = {
+FINANCE_PATTERNS: List[Tuple[str, Category, Severity, str]] = [
+    # Trading intent - buy/sell recommendations
+    (rf'(?i)\b(buy|sell|short|long|accumulate)\s+({STOCK_PATTERN})',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Trading recommendation detected"),
     
-    Category.FINANCE_TRADING_INTENT: [
-        # Direct buy/sell recommendations
-        (r'(?i)\b(buy|sell|short|long)\s+(RELIANCE|TCS|HDFCBANK|INFY|ICICIBANK|SBIN|BHARTIARTL|KOTAKBANK|AXISBANK|TATAMOTORS|TATASTEEL|WIPRO|HCLTECH|NIFTY|BANKNIFTY|SENSEX)\b', 
-         "Trading recommendation detected", 0.95),
-        
-        # Price targets
-        (r'(?i)\b(target|tp|sl|stoploss|stop.?loss)\s*[:=]?\s*(?:rs\.?|₹|inr)?\s*\d+', 
-         "Price target/stoploss detected", 0.90),
-        
-        # Entry/exit signals
-        (r'(?i)\b(entry|exit|book\s*profit|add\s*more|accumulate)\s+(?:at|@|near)?\s*(?:rs\.?|₹)?\s*\d+', 
-         "Entry/exit signal detected", 0.90),
-        
-        # Options trading
-        (r'(?i)\b(call|put)\s*\d+\s*(ce|pe|strike)', 
-         "Options trading signal detected", 0.95),
-        (r'(?i)\b\d+\s*(ce|pe)\s+(buy|sell)', 
-         "Options trading signal detected", 0.95),
-        
-        # Generic trading language with stocks
-        (r'(?i)\b(going\s+(?:up|down)|bullish|bearish|breakout|breakdown)\s+(?:on|in|for)?\s*(RELIANCE|TCS|HDFCBANK|INFY|NIFTY|BANKNIFTY)', 
-         "Market prediction detected", 0.85),
-    ],
+    (rf'(?i)\b({STOCK_PATTERN})\s+(is\s+)?(very\s+)?(bullish|bearish|breaking|breakout)',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Market analysis with stock"),
     
-    Category.FINANCE_INSIDER_INFO: [
-        # Results/earnings before announcement
-        (r'(?i)\b(results?|earnings?|quarter(?:ly)?)\s+(?:will\s+be|expected|likely)\s+(good|bad|strong|weak|better|worse)', 
-         "Potential insider info - results prediction", 0.80),
-        
-        # Merger/acquisition hints
-        (r'(?i)\b(merger|acquisition|takeover|buyout)\s+(?:is\s+)?(?:coming|likely|expected|happening)', 
-         "Potential insider info - M&A", 0.85),
-        
-        # Board meeting hints
-        (r'(?i)\b(board\s+meeting|dividend|bonus|split)\s+(?:will|expected|likely|coming)', 
-         "Potential insider info - corporate action", 0.80),
-        
-        # Confidential/not public
-        (r'(?i)\b(confidential|not\s+(?:yet\s+)?(?:public|announced)|inside\s+info|tip\s+from)', 
-         "Potential insider information language", 0.90),
-        
-        # "I heard" patterns
-        (r'(?i)\b(heard\s+from|source\s+(?:says?|told)|reliable\s+info)\b', 
-         "Unverified source claim", 0.75),
-    ],
+    (rf'(?i)\b({STOCK_PATTERN})\s+.{{0,20}}(target|tp|sl|stoploss)',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Price target detected"),
     
-    Category.FINANCE_INVESTMENT_ADVICE: [
-        # Guaranteed returns
-        (r'(?i)\b(guaranteed|assured|definite|sure\s*shot)\s+(?:returns?|profit|gains?)', 
-         "Guaranteed returns claim (likely unregistered advice)", 0.95),
-        
-        # Percentage promises
-        (r'(?i)\b(\d+\s*%|double|triple)\s+(?:returns?|profit|in\s+\d+\s+(?:days?|weeks?|months?))', 
-         "Return promise detected", 0.90),
-        
-        # Advisory language
-        (r'(?i)\b(invest\s+(?:now|today|immediately)|don\'?t\s+miss|last\s+chance|urgent\s+buy)', 
-         "Urgent investment advice", 0.85),
-        
-        # SEBI disclaimer absence indicators
-        (r'(?i)\b(not\s+sebi|no\s+sebi|without\s+sebi)\s+(?:registered|registration)', 
-         "Unregistered advisor indication", 0.95),
-    ],
+    (r'(?i)\b(entry|exit|book\s+profit)\s*(at|@)?\s*₹?\d+',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Entry/exit signal detected"),
     
-    Category.FINANCE_LOAN_DISCUSSION: [
-        # Loan amount discussions
-        (r'(?i)\b(loan|emi|credit|borrow)\s+(?:of|for|amount)?\s*(?:rs\.?|₹|inr)?\s*\d+(?:\s*(?:lakh|lac|crore|cr|k|L))?\b', 
-         "Loan amount discussion", 0.85),
-        
-        # Interest rate discussions
-        (r'(?i)\b(interest\s+rate|roi|rate\s+of\s+interest)\s*[:=]?\s*\d+(?:\.\d+)?\s*%', 
-         "Interest rate discussion", 0.80),
-        
-        # Loan approval
-        (r'(?i)\b(loan\s+(?:approved|sanctioned|disbursed)|sanction\s+letter)', 
-         "Loan approval discussion", 0.85),
-        
-        # Credit score
-        (r'(?i)\b(cibil|credit\s*score|bureau\s*score)\s*[:=]?\s*\d{3}', 
-         "Credit score detected", 0.90),
-    ],
-}
+    (rf'(?i)\b({STOCK_PATTERN})\s+\d+\s*(CE|PE|call|put)',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Options trading detected"),
+    
+    (rf'(?i)\b({STOCK_PATTERN})\s+(going|headed|will\s+go)\s+(to|up|down)',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Price prediction detected"),
+    
+    (rf'(?i)\bbook\s+profit\s+(in\s+)?({STOCK_PATTERN})',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Profit booking recommendation"),
+    
+    (rf'(?i)\baccumulate\s+({STOCK_PATTERN})',
+     Category.FINANCE_TRADING_INTENT, Severity.HIGH, "Accumulation recommendation"),
+    
+    # Insider info
+    (r'(?i)\b(results?|earnings?)\s+(will\s+be|are|expected)\s+(good|bad|strong|weak|positive|negative)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Results prediction"),
+    
+    (r'(?i)\b(merger|acquisition|buyback|takeover)\s+(is\s+)?(coming|likely|expected|happening)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: M&A"),
+    
+    (r'(?i)\bsource\s+(told|says?|informed)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Unverified source"),
+    
+    (r'(?i)\b(confidential|private|inside|insider)\s+(info|information|tip)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Confidential"),
+    
+    (r'(?i)\b(board\s+meeting|dividend|bonus|stock\s+split)\s+(tomorrow|expected|coming)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Corporate action"),
+    
+    (r'(?i)\bnot\s+(yet\s+)?public',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Non-public"),
+    
+    (r'(?i)\bheard\s+from\s+(management|source|insider)',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Management source"),
+    
+    (r'(?i)\breliable\s+source\s+says',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Reliable source claim"),
+    
+    (r'(?i)\btip\s+from\s+insider',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Insider tip"),
+    
+    (r'(?i)\bprivate\s+information',
+     Category.FINANCE_INSIDER_INFO, Severity.CRITICAL, "Insider info: Private information"),
+    
+    # Investment advice
+    (r'(?i)\b(guaranteed|assured)\s+.{0,20}(returns?|profit)',
+     Category.FINANCE_INVESTMENT_ADVICE, Severity.HIGH, "Investment advice: Guaranteed returns"),
+    
+    (r'(?i)\b(double|triple)\s+(your\s+)?money\s+(in\s+)?\d+\s*(months?|weeks?|days?|years?)',
+     Category.FINANCE_INVESTMENT_ADVICE, Severity.HIGH, "Investment advice: Unrealistic returns"),
+    
+    (r'(?i)\binvest\s+now\s+(for|and)',
+     Category.FINANCE_INVESTMENT_ADVICE, Severity.HIGH, "Investment advice: Urgency"),
+    
+    (r'(?i)\b\d+%\s+returns?\s+(in|within)\s+\d+',
+     Category.FINANCE_INVESTMENT_ADVICE, Severity.HIGH, "Investment advice: Return promise"),
+    
+    # Loan discussion
+    (r'(?i)\bloan\s+(of\s+)?(rs\.?|₹|inr)?\s*\d+\s*(lakh|crore|k)?',
+     Category.FINANCE_LOAN_DISCUSSION, Severity.MEDIUM, "Loan discussion: Amount"),
+    
+    (r'(?i)\b(emi|installment)\s+(will\s+be|is|of)\s*(rs\.?|₹)?\s*\d+',
+     Category.FINANCE_LOAN_DISCUSSION, Severity.MEDIUM, "Loan discussion: EMI"),
+    
+    (r'(?i)\b(interest\s+rate|rate\s+of\s+interest)\s+(is|at|of)\s*\d+\.?\d*\s*%',
+     Category.FINANCE_LOAN_DISCUSSION, Severity.MEDIUM, "Loan discussion: Interest rate"),
+]
 
 
 class FinanceIntentDetector:
-    """
-    Detect finance-related intents that may violate compliance.
-    
-    This is specialized for Indian financial markets and regulations:
-    - SEBI guidelines on investment advice
-    - Insider trading regulations
-    - RBI guidelines on loan discussions
-    """
+    """Detect finance-related intent and potential compliance issues."""
     
     def __init__(self):
         self.name = "finance_intent"
-        self._compiled_patterns: Dict[Category, List[Tuple[re.Pattern, str, float]]] = {}
-        
-        for category, patterns in FINANCE_INTENT_PATTERNS.items():
-            self._compiled_patterns[category] = [
-                (re.compile(pattern), explanation, confidence)
-                for pattern, explanation, confidence in patterns
-            ]
-        
-        # Build stock symbol pattern dynamically
-        symbols_pattern = '|'.join(STOCK_SYMBOLS)
-        self._stock_pattern = re.compile(rf'\b({symbols_pattern})\b', re.IGNORECASE)
+        self._patterns = [
+            (re.compile(pattern), category, severity, explanation)
+            for pattern, category, severity, explanation in FINANCE_PATTERNS
+        ]
     
     def detect(self, text: str) -> List[Detection]:
+        """Detect finance intent in text."""
         detections = []
         
-        for category, patterns in self._compiled_patterns.items():
-            for pattern, explanation, confidence in patterns:
-                for match in pattern.finditer(text):
-                    matched_text = match.group(0)
-                    
-                    # Determine severity based on category
-                    if category == Category.FINANCE_INSIDER_INFO:
-                        severity = Severity.CRITICAL
-                    elif category == Category.FINANCE_TRADING_INTENT:
-                        severity = Severity.HIGH
-                    elif category == Category.FINANCE_INVESTMENT_ADVICE:
-                        severity = Severity.HIGH
-                    else:
-                        severity = Severity.MEDIUM
-                    
-                    detections.append(Detection(
-                        category=category,
-                        severity=severity,
-                        confidence=confidence,
-                        matched_text=matched_text,
-                        start_pos=match.start(),
-                        end_pos=match.end(),
-                        explanation=explanation,
-                        detector=self.name
-                    ))
+        for pattern, category, severity, explanation in self._patterns:
+            match = pattern.search(text)
+            if match:
+                detections.append(Detection(
+                    category=category,
+                    severity=severity,
+                    confidence=0.90,
+                    matched_text=match.group(0),
+                    start_pos=match.start(),
+                    end_pos=match.end(),
+                    explanation=explanation,
+                    detector=self.name
+                ))
         
-        # Deduplicate
+        # Deduplicate by category
         seen = set()
         unique = []
-        for d in detections:
-            key = (d.category, d.matched_text.lower())
-            if key not in seen:
-                seen.add(key)
+        for d in sorted(detections, key=lambda x: x.severity.value, reverse=True):
+            if d.category not in seen:
+                seen.add(d.category)
                 unique.append(d)
         
         return unique
-    
-    def has_stock_mention(self, text: str) -> bool:
-        """Check if text mentions any stock symbols."""
-        return bool(self._stock_pattern.search(text))
