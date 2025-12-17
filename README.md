@@ -1,208 +1,191 @@
 # Universal Restrictor
 
-Model-agnostic content classification for LLM applications.
+**Model-agnostic content classification API for LLM safety.**
 
-**Detects:**
-- 🔒 **PII** (emails, phones, credit cards, Aadhaar, PAN, API keys, passwords)
-- ☠️ **Toxic content** (hate speech, harassment, violence, profanity)
-- 🛡️ **Prompt injection** (jailbreaks, instruction override, data exfiltration)
-
-**Returns:**
-- `ALLOW` - Content is safe
-- `ALLOW_WITH_WARNING` - Minor issues detected, logged for audit
-- `REDACT` - PII removed, content allowed
-- `BLOCK` - Content not allowed
-
-## Quick Start
-
-```bash
-pip install universal-restrictor
-```
-
-```python
-from restrictor import Restrictor, Action
-
-# Initialize
-r = Restrictor()
-
-# Analyze content
-decision = r.analyze("Contact me at john@example.com or call 9876543210")
-
-print(decision.action)  # Action.REDACT
-print(decision.redacted_text)  # "Contact me at [REDACTED] or call [REDACTED]"
-
-# Check for blocks
-if decision.action == Action.BLOCK:
-    print("Content blocked!")
-    print(f"Reason: {decision.detections[0].explanation}")
-```
+Enterprise-grade detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services and on-premise deployment.
 
 ## Features
 
-### PII Detection
+| Detector | Description | Status |
+|----------|-------------|--------|
+| **PII Detection** | Email, phone, credit card, Aadhaar, PAN, bank accounts, IFSC, UPI, Demat, GST | ✅ |
+| **Toxicity Detection** | Hybrid keyword + Llama Guard 3 (local, no API calls) | ✅ |
+| **Finance Intent** | Trading signals, insider info, investment advice, loan discussions | ✅ |
+| **Prompt Injection** | Jailbreak attempts, instruction override | ✅ |
 
-Detects international and India-specific PII:
+## Quick Start
+```bash
+# Clone
+git clone https://github.com/ShashankDugad/universal-restrictor.git
+cd universal-restrictor
 
-| Type | Examples |
-|------|----------|
-| Email | `john@example.com` |
-| Phone | `+1-555-123-4567`, `9876543210` (Indian) |
-| Credit Card | `4111-1111-1111-1111` |
-| Aadhaar | `1234-5678-9012` |
-| PAN | `ABCDE1234F` |
-| API Keys | `sk-...`, `AKIA...`, `ghp_...` |
-| Passwords | `password=secret123` |
+# Setup
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-### Toxicity Detection
+# Download Llama Guard 3 (optional, for enhanced toxicity detection)
+python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='mradermacher/Llama-Guard-3-8B-GGUF',
+    filename='Llama-Guard-3-8B.Q8_0.gguf',
+    local_dir='./models'
+)
+"
 
-Uses ML model (or keyword fallback) to detect:
-- Hate speech
-- Harassment
-- Violence/threats
-- Sexual content
-- Self-harm references
-- Profanity
+# Run
+./run.sh
+```
 
-### Prompt Injection Detection
+API available at: http://localhost:8000/docs
 
-Catches common attack patterns:
-- Instruction override ("ignore previous instructions")
-- Jailbreak attempts (DAN, roleplay-based)
-- System prompt extraction
-- Data exfiltration attempts
-- Encoded payloads
+## API Usage
+
+### Analyze Text
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: test-api-key-123" \
+  -d '{"text": "Contact me at john@example.com"}'
+```
+
+**Response:**
+```json
+{
+  "action": "redact",
+  "request_id": "uuid",
+  "summary": {
+    "categories_found": ["pii_email"],
+    "max_severity": "medium",
+    "max_confidence": 0.95
+  },
+  "detections": [...],
+  "redacted_text": "Contact me at [REDACTED]"
+}
+```
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| `allow` | Safe content |
+| `allow_with_warning` | Potential concern (e.g., trading intent) |
+| `redact` | PII detected, redacted version provided |
+| `block` | Dangerous content (toxicity, insider info, prompt injection) |
+
+## India Finance PII (Unique)
+
+| Pattern | Example | Category |
+|---------|---------|----------|
+| Bank Account | `50100123456789` | `pii_bank_account` |
+| IFSC Code | `SBIN0001234` | `pii_ifsc` |
+| UPI ID | `name@okaxis` | `pii_upi` |
+| Demat Account | `IN12345678901234` | `pii_demat` |
+| GST Number | `27AAPFU0939F1ZV` | `pii_gst` |
+| Aadhaar | `2345 6789 0123` | `pii_aadhaar` |
+| PAN | `ABCDE1234F` | `pii_pan` |
+
+## Finance Intent Detection (Novel)
+
+| Category | Example | Action |
+|----------|---------|--------|
+| Trading Intent | "Buy RELIANCE target 2600" | `allow_with_warning` |
+| Insider Info | "Source told me merger coming" | `block` |
+| Investment Advice | "Guaranteed 50% returns" | `allow_with_warning` |
+| Loan Discussion | "Loan of Rs 50 lakh approved" | `allow_with_warning` |
+
+## Architecture
+```
+┌─────────────────────────────────────────────────────┐
+│                Universal Restrictor                  │
+├─────────────────────────────────────────────────────┤
+│  API (FastAPI)                                       │
+│  ├── Rate Limiting (60 req/min)                     │
+│  ├── API Key Auth                                   │
+│  └── CORS enabled                                   │
+├─────────────────────────────────────────────────────┤
+│  Detectors                                          │
+│  ├── PII (Regex) - India-specific patterns          │
+│  ├── Toxicity (Hybrid: Keywords + Llama Guard 3)    │
+│  ├── Finance Intent (Pattern-based)                 │
+│  └── Prompt Injection (Pattern-based)               │
+├─────────────────────────────────────────────────────┤
+│  Storage                                            │
+│  ├── Redis (primary, persistent)                    │
+│  └── File (fallback)                                │
+└─────────────────────────────────────────────────────┘
+```
+
+## On-Premise Deployment
+
+Designed for banks and financial institutions:
+
+- **No external API calls** - Llama Guard runs locally
+- **No data leaves your network** - 100% on-prem
+- **Docker ready** - `docker build -t restrictor .`
+- **Kubernetes ready** - Helm chart coming soon
 
 ## Configuration
 
-```python
-from restrictor import Restrictor, PolicyConfig, Action, Category
+### Environment Variables
 
-config = PolicyConfig(
-    # What to detect
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
+| `GROQ_API_KEY` | - | Optional: Groq API for cloud toxicity |
+
+### Policy Configuration
+```python
+from restrictor import Restrictor, PolicyConfig
+
+policy = PolicyConfig(
     detect_pii=True,
     detect_toxicity=True,
     detect_prompt_injection=True,
-    
-    # Thresholds
+    detect_finance_intent=True,
     toxicity_threshold=0.7,
     pii_confidence_threshold=0.8,
-    
-    # Actions
-    pii_action=Action.REDACT,
-    toxicity_action=Action.BLOCK,
-    prompt_injection_action=Action.BLOCK,
-    
-    # Only detect specific PII types
-    pii_types=[Category.PII_EMAIL, Category.PII_CREDIT_CARD],
-    
-    # Custom blocked terms
-    blocked_terms=["competitor_name", "internal_project"],
-    
-    # Redaction style
-    redact_replacement="[REDACTED]",
+    pii_types=["pii_email", "pii_phone"],  # Optional filter
 )
 
-r = Restrictor(config=config)
+r = Restrictor(policy=policy)
+result = r.analyze("Your text here")
 ```
 
-## Audit Logging
+## Feedback Loop
 
-Every decision includes audit-friendly data:
-
-```python
-decision = r.analyze("some text")
-
-print(decision.to_dict())
-# {
-#     "action": "allow",
-#     "request_id": "550e8400-e29b-41d4-a716-446655440000",
-#     "timestamp": "2024-01-15T10:30:00.000000",
-#     "processing_time_ms": 12.5,
-#     "input_hash": "sha256:...",  # For audit without storing content
-#     "summary": {
-#         "categories_found": ["pii_email"],
-#         "max_severity": "medium",
-#         "max_confidence": 0.95,
-#         "detection_count": 1
-#     },
-#     "detections": [...]
-# }
-```
-
-## Installation Options
-
+Submit feedback to improve detection:
 ```bash
-# Core only (regex-based, no ML)
-pip install universal-restrictor
-
-# With ML models (requires ~500MB download)
-pip install universal-restrictor[ml]
-
-# With API server
-pip install universal-restrictor[api]
-
-# Everything
-pip install universal-restrictor[all]
+# After analyzing, submit feedback
+curl -X POST http://localhost:8000/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "uuid-from-analyze",
+    "feedback_type": "false_positive",
+    "comment": "This is a public email"
+  }'
 ```
 
-## Performance
+Feedback types: `correct`, `false_positive`, `false_negative`, `category_correction`
 
-| Mode | Latency (p50) | Memory |
-|------|---------------|--------|
-| Regex only | <5ms | ~50MB |
-| With ML (CPU) | ~50ms | ~500MB |
-| With ML (GPU) | ~10ms | ~2GB |
+## Development
+```bash
+# Run tests
+pytest tests/
 
-## Use Cases
+# Run with hot reload
+uvicorn restrictor.api.server:app --reload
 
-### 1. Pre-LLM Filter (Input)
-```python
-user_input = request.get("prompt")
-decision = restrictor.analyze(user_input)
-
-if decision.action == Action.BLOCK:
-    return {"error": "Content policy violation"}
-
-# Safe to send to LLM
-response = llm.generate(user_input)
+# Docker build
+docker build -t universal-restrictor .
+docker run -p 8000:8000 universal-restrictor
 ```
-
-### 2. Post-LLM Filter (Output)
-```python
-response = llm.generate(prompt)
-decision = restrictor.analyze(response)
-
-if decision.action == Action.REDACT:
-    return {"response": decision.redacted_text}
-```
-
-### 3. Audit Trail
-```python
-decision = restrictor.analyze(content)
-
-# Log for compliance (no raw content stored)
-audit_log.write({
-    "request_id": decision.request_id,
-    "input_hash": decision.input_hash,
-    "action": decision.action.value,
-    "categories": [c.value for c in decision.categories_found],
-    "timestamp": decision.timestamp.isoformat(),
-})
-```
-
-## Roadmap
-
-- [ ] Hindi/Tamil/Telugu toxicity detection
-- [ ] ML-based PII detection (names, addresses)
-- [ ] Custom model fine-tuning
-- [ ] Async API
-- [ ] OpenTelemetry integration
-- [ ] Kubernetes Helm chart
 
 ## License
 
-MIT
+Proprietary - All rights reserved.
 
-## Contributing
+## Contact
 
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Shashank Dugad - [GitHub](https://github.com/ShashankDugad)
