@@ -1,0 +1,16 @@
+{{- if .Values.audit.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "universal-restrictor.fullname" . }}-audit
+  labels:
+    {{- include "universal-restrictor.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.audit.storageClass }}
+  storageClassName: {{ .Values.audit.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.audit.size }}

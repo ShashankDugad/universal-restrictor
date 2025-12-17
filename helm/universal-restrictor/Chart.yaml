@@ -1,0 +1,15 @@
+apiVersion: v2
+name: universal-restrictor
+description: Model-agnostic content classification API for LLM safety
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - nlp
+  - safety
+  - pii
+  - toxicity
+  - llm
+maintainers:
+  - name: Shashank Dugad
+    url: https://github.com/ShashankDugad
