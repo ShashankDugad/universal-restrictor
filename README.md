@@ -2,16 +2,34 @@
 
 **Model-agnostic content classification API for LLM safety.**
 
-Enterprise-grade detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services and on-premise deployment.
+Enterprise-grade detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services with on-premise deployment support.
 
 ## Features
 
 | Detector | Description | Status |
 |----------|-------------|--------|
-| **PII Detection** | Email, phone, credit card, Aadhaar, PAN, bank accounts, IFSC, UPI, Demat, GST | ✅ |
-| **Toxicity Detection** | Hybrid keyword + Llama Guard 3 (local, no API calls) | ✅ |
-| **Finance Intent** | Trading signals, insider info, investment advice, loan discussions | ✅ |
+| **PII Detection** | Email, phone, Aadhaar, PAN, bank accounts, IFSC, UPI, Demat, GST | ✅ |
+| **Toxicity Detection** | Hybrid: Keywords + Llama Guard 3 + Claude API (premium) | ✅ |
+| **Finance Intent** | Trading signals, insider info, investment advice | ✅ |
 | **Prompt Injection** | Jailbreak attempts, instruction override | ✅ |
+
+## Detection Pipeline
+```
+Input Text
+    │
+    ├─→ [PII Regex] ──────────────→ REDACT (fast, free)
+    ├─→ [Finance Regex] ──────────→ WARN/BLOCK (fast, free)
+    ├─→ [Prompt Injection] ───────→ BLOCK (fast, free)
+    │
+    └─→ [Toxicity]
+         ├─→ [Keywords] ──────────→ BLOCK obvious threats
+         │
+         └─→ [Escalation Classifier]
+              ├─→ Safe ───────────→ ALLOW (fast, free)
+              └─→ Suspicious ─────→ [Claude API] → BLOCK/ALLOW
+```
+
+**Cost:** ~$0.002 per 100 requests (only escalated cases hit Claude API)
 
 ## Quick Start
 ```bash
@@ -24,7 +42,10 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Download Llama Guard 3 (optional, for enhanced toxicity detection)
+# Set API key (for premium detection)
+export ANTHROPIC_API_KEY="your-key-here"
+
+# Download Llama Guard 3 (optional, for local detection)
 python -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
@@ -55,6 +76,7 @@ curl -X POST http://localhost:8000/analyze \
 {
   "action": "redact",
   "request_id": "uuid",
+  "processing_time_ms": 15.2,
   "summary": {
     "categories_found": ["pii_email"],
     "max_severity": "medium",
@@ -72,7 +94,7 @@ curl -X POST http://localhost:8000/analyze \
 | `allow` | Safe content |
 | `allow_with_warning` | Potential concern (e.g., trading intent) |
 | `redact` | PII detected, redacted version provided |
-| `block` | Dangerous content (toxicity, insider info, prompt injection) |
+| `block` | Dangerous content blocked |
 
 ## Python SDK Usage
 ```python
@@ -81,8 +103,8 @@ from restrictor import Restrictor, PolicyConfig
 # Basic usage
 r = Restrictor()
 result = r.analyze("Contact me at john@example.com")
-print(result.action)  # Action.REDACT
-print(result.redacted_text)  # "Contact me at [REDACTED]"
+print(result.action)        # Action.REDACT
+print(result.redacted_text) # "Contact me at [REDACTED]"
 
 # With custom policy
 policy = PolicyConfig(
@@ -90,17 +112,18 @@ policy = PolicyConfig(
     detect_toxicity=True,
     detect_prompt_injection=True,
     detect_finance_intent=True,
-    pii_types=["pii_email", "pii_phone"],  # Filter specific PII types
+    pii_types=["pii_email", "pii_phone"],
     pii_confidence_threshold=0.9,
-    redact_replacement="[HIDDEN]",  # Custom replacement text
+    redact_replacement="[HIDDEN]",
 )
 r = Restrictor(policy=policy)
 
-# Or use 'config' alias
-r = Restrictor(config=policy)
+# Disable Claude API (local-only detection)
+r = Restrictor(enable_claude=False)
 
-# Convert to dictionary
-result_dict = result.to_dict()
+# Check API usage
+usage = r.get_api_usage()
+print(f"Cost: ${usage['total_cost_usd']}")
 ```
 
 ## PolicyConfig Options
@@ -115,11 +138,8 @@ result_dict = result.to_dict()
 | `pii_confidence_threshold` | float | `0.8` | Minimum confidence for PII |
 | `toxicity_threshold` | float | `0.7` | Minimum confidence for toxicity |
 | `redact_replacement` | str | `"[REDACTED]"` | Custom replacement text |
-| `pii_action` | Action | `REDACT` | Action for PII detections |
-| `toxicity_action` | Action | `BLOCK` | Action for toxicity |
-| `prompt_injection_action` | Action | `BLOCK` | Action for prompt injection |
 
-## India Finance PII (Unique)
+## India Finance PII
 
 | Pattern | Example | Category |
 |---------|---------|----------|
@@ -131,14 +151,45 @@ result_dict = result.to_dict()
 | Aadhaar | `2345 6789 0123` | `pii_aadhaar` |
 | PAN | `ABCDE1234F` | `pii_pan` |
 
-## Finance Intent Detection (Novel)
+## Finance Intent Detection
 
 | Category | Example | Action |
 |----------|---------|--------|
 | Trading Intent | "Buy RELIANCE target 2600" | `allow_with_warning` |
 | Insider Info | "Source told me merger coming" | `block` |
 | Investment Advice | "Guaranteed 50% returns" | `allow_with_warning` |
-| Loan Discussion | "Loan of Rs 50 lakh approved" | `allow_with_warning` |
+
+## Subtle Threat Detection (Premium)
+
+The escalation classifier + Claude API catches veiled threats:
+
+| Text | Detection |
+|------|-----------|
+| "Something bad might happen to you" | ✅ Violence |
+| "Those people are ruining our country" | ✅ Hate speech |
+| "Nobody would miss me" | ✅ Self-harm |
+| "You're mature for your age" | ✅ Grooming |
+
+## Rate Limiting & Cost Control
+```python
+from restrictor.detectors.claude_detector import ClaudeDetector, RateLimitConfig
+
+# Custom rate limits
+config = RateLimitConfig(
+    requests_per_minute=30,      # Max 30 Claude calls/min
+    daily_cost_cap_usd=1.0,      # $1/day max
+    max_tokens_per_request=300,  # Token limit per call
+)
+
+detector = ClaudeDetector(rate_limit=config)
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | - | Claude API key (for premium detection) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
 
 ## Architecture
 ```
@@ -152,7 +203,10 @@ result_dict = result.to_dict()
 ├─────────────────────────────────────────────────────┤
 │  Detectors                                          │
 │  ├── PII (Regex) - India-specific patterns          │
-│  ├── Toxicity (Hybrid: Keywords + Llama Guard 3)    │
+│  ├── Toxicity (Hybrid)                              │
+│  │   ├── Keywords (fast, obvious threats)           │
+│  │   ├── Escalation Classifier (suspicious check)   │
+│  │   └── Claude API (premium, subtle threats)       │
 │  ├── Finance Intent (Pattern-based)                 │
 │  └── Prompt Injection (Pattern-based)               │
 ├─────────────────────────────────────────────────────┤
@@ -166,54 +220,44 @@ result_dict = result.to_dict()
 
 Designed for banks and financial institutions:
 
-- **No external API calls** - Llama Guard runs locally
-- **No data leaves your network** - 100% on-prem
+- **Local-only mode** - Set `enable_claude=False`
+- **No data leaves your network** - Llama Guard runs locally
 - **Docker ready** - `docker build -t restrictor .`
 - **Kubernetes ready** - Helm chart coming soon
 
-## Environment Variables
+## Accuracy
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
-| `GROQ_API_KEY` | - | Optional: Groq API for cloud toxicity |
-
-## Feedback Loop
-
-Submit feedback to improve detection:
-```bash
-curl -X POST http://localhost:8000/feedback \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "uuid-from-analyze",
-    "feedback_type": "false_positive",
-    "comment": "This is a public email"
-  }'
-```
-
-Feedback types: `correct`, `false_positive`, `false_negative`, `category_correction`
+| Test Suite | Accuracy |
+|------------|----------|
+| Original 100 sentences | 100% |
+| Subtle threats (25 sentences) | 100% |
 
 ## Development
 ```bash
 # Run tests
 pytest tests/
 
-# Run with hot reload
+# Run server with hot reload
 uvicorn restrictor.api.server:app --reload
 
-# Docker build
+# Docker
 docker build -t universal-restrictor .
-docker run -p 8000:8000 universal-restrictor
+docker run -p 8000:8000 -e ANTHROPIC_API_KEY=xxx universal-restrictor
 ```
 
 ## Roadmap
 
-- [ ] Hindi/Tamil/Telugu toxicity detection
-- [ ] ML-based PII detection (names, addresses)
-- [ ] Custom model fine-tuning
-- [ ] Async API
-- [ ] OpenTelemetry integration
+- [x] PII detection (India-specific)
+- [x] Toxicity detection (hybrid)
+- [x] Finance intent detection
+- [x] Prompt injection detection
+- [x] Claude API premium tier
+- [x] Rate limiting & cost control
+- [x] Redis storage
 - [ ] Kubernetes Helm chart
+- [ ] Admin dashboard
+- [ ] Hindi/Tamil/Telugu toxicity
+- [ ] ML-based PII (names, addresses)
 
 ## License
 
