@@ -5,10 +5,9 @@ FastAPI server for Universal Restrictor API.
 import hashlib
 import time
 import logging
-from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -17,6 +16,7 @@ from ..engine import Restrictor
 from ..models import Action, PolicyConfig
 from ..feedback.storage import get_feedback_storage
 from .feedback_routes import router as feedback_router
+from .middleware import RateLimitMiddleware, get_api_key_auth, APIKeyAuth
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,23 +26,38 @@ logger = logging.getLogger(__name__)
 restrictor: Optional[Restrictor] = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Manage application lifecycle."""
+def get_restrictor() -> Restrictor:
+    """Get restrictor instance."""
     global restrictor
-    logger.info("Initializing Universal Restrictor...")
-    restrictor = Restrictor()
-    logger.info("Restrictor ready.")
-    yield
-    logger.info("Shutting down...")
+    if restrictor is None:
+        restrictor = Restrictor()
+    return restrictor
+
+
+async def verify_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    auth: APIKeyAuth = Depends(get_api_key_auth)
+) -> dict:
+    """Verify API key and return tenant info."""
+    # Allow unauthenticated access for now (MVP)
+    if x_api_key is None:
+        return {"tenant_id": "anonymous", "tier": "free"}
+    
+    tenant = auth.validate(x_api_key)
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    return tenant
 
 
 app = FastAPI(
     title="Universal Restrictor API",
     description="Model-agnostic content classification API for LLM safety",
     version="0.1.0",
-    lifespan=lifespan
 )
+
+# Add rate limiting middleware
+app.add_middleware(RateLimitMiddleware, requests_per_minute=60)
 
 # Add CORS middleware
 app.add_middleware(
@@ -61,6 +76,13 @@ app.include_router(feedback_router)
 class AnalyzeRequest(BaseModel):
     """Request to analyze text."""
     text: str = Field(..., min_length=1, max_length=100000)
+    detect_pii: bool = True
+    detect_toxicity: bool = True
+    detect_prompt_injection: bool = True
+    detect_finance_intent: bool = True
+    pii_types: Optional[List[str]] = None
+    toxicity_threshold: float = Field(0.7, ge=0.0, le=1.0)
+    pii_confidence_threshold: float = Field(0.8, ge=0.0, le=1.0)
 
 
 class DetectionDetail(BaseModel):
@@ -104,6 +126,15 @@ class HealthResponse(BaseModel):
     detectors: dict
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize on startup."""
+    global restrictor
+    logger.info("Initializing Universal Restrictor...")
+    restrictor = Restrictor()
+    logger.info("Restrictor ready.")
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check API health and detector status."""
@@ -113,25 +144,39 @@ async def health_check():
         detectors={
             "pii": "active",
             "toxicity": "active",
-            "prompt_injection": "active"
+            "prompt_injection": "active",
+            "finance_intent": "active"
         }
     )
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze_text(request: AnalyzeRequest):
+async def analyze_text(
+    request: AnalyzeRequest,
+    tenant: dict = Depends(verify_api_key)
+):
     """
     Analyze text for PII, toxicity, and prompt injection.
     
     Returns detection results with action recommendation.
     """
-    if restrictor is None:
-        raise HTTPException(status_code=503, detail="Service not initialized")
+    r = get_restrictor()
     
     start_time = time.time()
     
-    # Run analysis - engine only takes text and context
-    result = restrictor.analyze(text=request.text)
+    # Build policy from request
+    policy = PolicyConfig(
+        detect_pii=request.detect_pii,
+        detect_toxicity=request.detect_toxicity,
+        detect_prompt_injection=request.detect_prompt_injection,
+        detect_finance_intent=request.detect_finance_intent,
+        toxicity_threshold=request.toxicity_threshold,
+        pii_confidence_threshold=request.pii_confidence_threshold,
+        pii_types=request.pii_types,
+    )
+    
+    # Run analysis
+    result = r.analyze(text=request.text, policy=policy)
     
     processing_time = (time.time() - start_time) * 1000
     
@@ -149,7 +194,6 @@ async def analyze_text(request: AnalyzeRequest):
         for d in result.detections
     ]
     
-    # Get categories as strings
     categories = [c.value for c in result.categories_found]
     
     # Cache request for feedback
@@ -180,14 +224,16 @@ async def analyze_text(request: AnalyzeRequest):
 
 
 @app.post("/analyze/batch")
-async def analyze_batch(request: BatchRequest):
+async def analyze_batch(
+    request: BatchRequest,
+    tenant: dict = Depends(verify_api_key)
+):
     """Analyze multiple texts in one request."""
-    if restrictor is None:
-        raise HTTPException(status_code=503, detail="Service not initialized")
+    r = get_restrictor()
     
     results = []
     for text in request.texts:
-        result = restrictor.analyze(text=text)
+        result = r.analyze(text=text)
         results.append({
             "action": result.action.value,
             "request_id": result.request_id,

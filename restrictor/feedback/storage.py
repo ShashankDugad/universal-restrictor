@@ -1,21 +1,53 @@
-"""Feedback storage - local JSON file for MVP, DynamoDB for production."""
+"""
+Feedback storage - Redis for production, JSON file fallback.
+"""
 
 import json
 import os
 import uuid
-import hashlib
 from datetime import datetime
 from typing import Optional, List, Dict
 from pathlib import Path
+import logging
 
 from .models import FeedbackRecord, FeedbackType
 
+logger = logging.getLogger(__name__)
 
-class FeedbackStorage:
-    """
-    Store feedback locally for MVP.
+# Try Redis first
+_redis_storage = None
+_file_storage = None
+
+
+def get_feedback_storage():
+    """Get best available storage backend."""
+    global _redis_storage, _file_storage
     
-    Production: Replace with DynamoDB.
+    # Try Redis first
+    if _redis_storage is None:
+        try:
+            from .redis_storage import RedisFeedbackStorage
+            _redis_storage = RedisFeedbackStorage()
+            if _redis_storage.client is not None:
+                logger.info("Using Redis feedback storage")
+                return _redis_storage
+        except Exception as e:
+            logger.warning(f"Redis unavailable: {e}")
+    
+    if _redis_storage and _redis_storage.client is not None:
+        return _redis_storage
+    
+    # Fallback to file storage
+    if _file_storage is None:
+        _file_storage = FileFeedbackStorage()
+        logger.info("Using file-based feedback storage")
+    
+    return _file_storage
+
+
+class FileFeedbackStorage:
+    """
+    File-based feedback storage (fallback).
     """
     
     def __init__(self, storage_path: str = None):
@@ -27,7 +59,6 @@ class FeedbackStorage:
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Request cache: stores recent requests for feedback linking
         self._request_cache: Dict[str, dict] = {}
         self._cache_max_size = 10000
     
@@ -41,9 +72,7 @@ class FeedbackStorage:
         confidence: float
     ):
         """Cache request details for feedback linking."""
-        # Limit cache size
         if len(self._request_cache) >= self._cache_max_size:
-            # Remove oldest 10%
             keys = list(self._request_cache.keys())
             for k in keys[:len(keys)//10]:
                 del self._request_cache[k]
@@ -65,25 +94,17 @@ class FeedbackStorage:
         comment: Optional[str] = None,
         tenant_id: str = "default"
     ) -> Optional[FeedbackRecord]:
-        """
-        Store feedback for a request.
-        
-        Returns FeedbackRecord if successful, None if request not found.
-        Returns existing record if duplicate.
-        """
-        # Get cached request
+        """Store feedback for a request."""
         cached = self._request_cache.get(request_id)
         if not cached:
             return None
         
-        # Load existing feedback
         feedback_list = self._load_feedback()
         
-        # Check for duplicate (same request_id and feedback_type)
+        # Check for duplicate
         for existing in feedback_list:
             if (existing.get("request_id") == request_id and 
                 existing.get("feedback_type") == feedback_type.value):
-                # Return existing record instead of creating duplicate
                 return FeedbackRecord(
                     feedback_id=existing["feedback_id"],
                     tenant_id=existing["tenant_id"],
@@ -101,7 +122,6 @@ class FeedbackStorage:
                     included_in_training=existing.get("included_in_training", False)
                 )
         
-        # Create feedback record
         record = FeedbackRecord(
             feedback_id=f"fb_{uuid.uuid4().hex[:12]}",
             tenant_id=tenant_id,
@@ -119,10 +139,7 @@ class FeedbackStorage:
             included_in_training=False
         )
         
-        # Add new record
         feedback_list.append(record.model_dump(mode="json"))
-        
-        # Save
         self._save_feedback(feedback_list)
         
         return record
@@ -132,12 +149,7 @@ class FeedbackStorage:
         feedback_list = self._load_feedback()
         
         if not feedback_list:
-            return {
-                "total": 0,
-                "by_type": {},
-                "reviewed": 0,
-                "pending_review": 0
-            }
+            return {"total": 0, "by_type": {}, "reviewed": 0, "pending_review": 0}
         
         by_type = {}
         reviewed = 0
@@ -158,11 +170,7 @@ class FeedbackStorage:
     def get_feedback_for_training(self, limit: int = 1000) -> List[dict]:
         """Get unprocessed feedback for training."""
         feedback_list = self._load_feedback()
-        
-        return [
-            fb for fb in feedback_list 
-            if not fb.get("included_in_training")
-        ][:limit]
+        return [fb for fb in feedback_list if not fb.get("included_in_training")][:limit]
     
     def mark_as_trained(self, feedback_ids: List[str]):
         """Mark feedback as included in training."""
@@ -189,14 +197,3 @@ class FeedbackStorage:
         """Save feedback to file."""
         with open(self.storage_path, "w") as f:
             json.dump(feedback_list, f, indent=2, default=str)
-
-
-# Singleton instance
-_storage_instance = None
-
-def get_feedback_storage() -> FeedbackStorage:
-    """Get global feedback storage instance."""
-    global _storage_instance
-    if _storage_instance is None:
-        _storage_instance = FeedbackStorage()
-    return _storage_instance

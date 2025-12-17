@@ -16,5 +16,23 @@
     "timestamp": "2025-12-15T04:33:06.892918",
     "reviewed": false,
     "included_in_training": false
+  },
+  {
+    "feedback_id": "fb_a796420ff08b",
+    "tenant_id": "default",
+    "request_id": "6206db54-4fbb-477f-991e-309281c61acd",
+    "input_hash": "d18c88f567bb5bd35917dd8fca7a10303d0bc16666dd1d960a5a29073dc064c7",
+    "input_length": 15,
+    "original_decision": "block",
+    "original_categories": [
+      "toxic_hate"
+    ],
+    "original_confidence": 0.95,
+    "feedback_type": "correct",
+    "corrected_category": "toxic_hate",
+    "comment": "correct",
+    "timestamp": "2025-12-15T14:59:29.291206",
+    "reviewed": false,
+    "included_in_training": false
   }
 ]

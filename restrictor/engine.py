@@ -31,32 +31,51 @@ class Restrictor:
         self.prompt_injection_detector = PromptInjectionDetector()
         self.finance_detector = FinanceIntentDetector()
     
-    def analyze(self, text: str, context: Optional[dict] = None) -> Decision:
+    def analyze(self, text: str, context: Optional[dict] = None, policy: PolicyConfig = None) -> Decision:
         """
         Analyze text and return a decision.
+        
+        Args:
+            text: Text to analyze
+            context: Optional context
+            policy: Optional policy override
         """
         start_time = time.time()
+        
+        # Use provided policy or default
+        policy = policy or self.policy
         
         all_detections: List[Detection] = []
         
         # Run PII detection
-        pii_detections = self.pii_detector.detect(text)
-        all_detections.extend(pii_detections)
+        if policy.detect_pii:
+            pii_detections = self.pii_detector.detect(text)
+            # Filter by confidence threshold
+            pii_detections = [d for d in pii_detections if d.confidence >= policy.pii_confidence_threshold]
+            # Filter by PII types if specified
+            if policy.pii_types:
+                pii_detections = [d for d in pii_detections if d.category.value in policy.pii_types]
+            all_detections.extend(pii_detections)
+        else:
+            pii_detections = []
         
         # Run toxicity detection
-        toxicity_detections = self.toxicity_detector.detect(text)
-        all_detections.extend(toxicity_detections)
+        if policy.detect_toxicity:
+            toxicity_detections = self.toxicity_detector.detect(text, threshold=policy.toxicity_threshold)
+            all_detections.extend(toxicity_detections)
         
         # Run prompt injection detection
-        injection_detections = self.prompt_injection_detector.detect(text)
-        all_detections.extend(injection_detections)
+        if policy.detect_prompt_injection:
+            injection_detections = self.prompt_injection_detector.detect(text)
+            all_detections.extend(injection_detections)
         
         # Run finance intent detection
-        finance_detections = self.finance_detector.detect(text)
-        all_detections.extend(finance_detections)
+        if policy.detect_finance_intent:
+            finance_detections = self.finance_detector.detect(text)
+            all_detections.extend(finance_detections)
         
         # Determine action
-        action = self._determine_action(all_detections)
+        action = self._determine_action(all_detections, policy)
         
         # Generate redacted text if needed
         redacted_text = None
@@ -86,18 +105,18 @@ class Restrictor:
             redacted_text=redacted_text
         )
     
-    def _determine_action(self, detections: List[Detection]) -> Action:
-        """Determine action based on detections."""
+    def _determine_action(self, detections: List[Detection], policy: PolicyConfig) -> Action:
+        """Determine action based on detections and policy."""
         if not detections:
             return Action.ALLOW
         
         # Block on critical categories
         for d in detections:
             if d.category in [Category.PROMPT_INJECTION, Category.JAILBREAK_ATTEMPT]:
-                return Action.BLOCK
+                return policy.prompt_injection_action
             
             if d.category in [Category.TOXIC_HATE, Category.TOXIC_VIOLENCE, Category.TOXIC_SELF_HARM]:
-                return Action.BLOCK
+                return policy.toxicity_action
             
             if d.category == Category.FINANCE_INSIDER_INFO:
                 return Action.BLOCK
@@ -114,13 +133,13 @@ class Restrictor:
         # Redact PII
         has_pii = any(d.category.value.startswith('pii_') for d in detections)
         if has_pii:
-            return Action.REDACT
+            return policy.pii_action
         
         if detections:
             return Action.ALLOW_WITH_WARNING
         
         return Action.ALLOW
     
-    def analyze_batch(self, texts: List[str]) -> List[Decision]:
+    def analyze_batch(self, texts: List[str], policy: PolicyConfig = None) -> List[Decision]:
         """Analyze multiple texts."""
-        return [self.analyze(text) for text in texts]
+        return [self.analyze(text, policy=policy) for text in texts]
