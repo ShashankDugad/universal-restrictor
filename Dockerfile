@@ -3,9 +3,11 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    build-essential \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -13,7 +15,10 @@ RUN groupadd -r restrictor && useradd -r -g restrictor restrictor
 
 # Copy requirements first for caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY restrictor/ ./restrictor/
