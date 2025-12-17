@@ -112,6 +112,17 @@ class EscalationClassifier:
             (r'(?i)\benemies?\s+must\s+be\s+(destroyed|eliminated)', "violence_advocacy"),
             (r'(?i)\bwake\s+up\s+sheeple', "conspiracy_language"),
             (r'(?i)\bopen\s+your\s+eyes', "recruitment_language"),
+            
+            # Hate/harassment expressions
+            (r'(?i)\bi\s+hate\s+(you|him|her|them|everyone)', "hate_expression"),
+            (r'(?i)\byou\s+(suck|are\s+worthless|are\s+trash)', "harassment"),
+            (r'(?i)\b(loser|idiot|moron|pathetic)\b', "insult"),
+            (r'(?i)\bgo\s+(to\s+hell|die)', "hostile_expression"),
+            (r'(?i)\bshut\s+up', "hostile_expression"),
+            (r'(?i)\b(hate|despise|loathe)\s+(you|him|her|them)', "hate_expression"),
+            (r'(?i)\byou\s+deserve\s+to\s+(die|suffer)', "threat"),
+            (r'(?i)\bwish\s+(you|he|she|they)\s+(were\s+)?dead', "death_wish"),
+            (r'(?i)\bkill\s+yourself', "self_harm_encouragement"),
         ]
         
         # Compile patterns

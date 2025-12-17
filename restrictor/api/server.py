@@ -9,9 +9,10 @@ import traceback
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, validator
 
 from ..engine import Restrictor
@@ -24,13 +25,16 @@ from .middleware import RateLimitMiddleware, require_api_key
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Security scheme for Swagger UI
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
 # Initialize app
 app = FastAPI(
     title="Universal Restrictor API",
     description="Model-agnostic content classification for LLM safety",
     version="0.1.0",
     docs_url="/docs" if os.getenv("ENABLE_DOCS", "true").lower() == "true" else None,
-    redoc_url=None,  # Disable redoc
+    redoc_url=None,
 )
 
 # CORS - Restrict to allowed origins
@@ -38,7 +42,6 @@ ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "").split(",")
 ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
 
 if not ALLOWED_ORIGINS:
-    # Default: no CORS (same-origin only)
     logger.warning("No CORS_ORIGINS set. CORS disabled (same-origin only).")
 else:
     logger.info(f"CORS enabled for origins: {ALLOWED_ORIGINS}")
@@ -84,7 +87,7 @@ class DetectionResponse(BaseModel):
     category: str
     severity: str
     confidence: float
-    matched_text: str  # Will be masked for PII
+    matched_text: str
     position: dict
     explanation: str
     detector: str
@@ -109,7 +112,6 @@ class FeedbackSubmitRequest(BaseModel):
     
     @validator('request_id')
     def validate_request_id(cls, v):
-        """Validate UUID format to prevent enumeration."""
         import re
         uuid_pattern = re.compile(
             r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
@@ -131,7 +133,6 @@ class FeedbackSubmitRequest(BaseModel):
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with sanitized responses."""
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.detail if isinstance(exc.detail, dict) else {
@@ -143,11 +144,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected errors without leaking internal details."""
-    # Log full error internally
     logger.error(f"Unhandled error: {exc}\n{traceback.format_exc()}")
-    
-    # Return sanitized response
     return JSONResponse(
         status_code=500,
         content={
@@ -160,15 +157,42 @@ async def general_exception_handler(request: Request, exc: Exception):
 # === Helper Functions ===
 
 def mask_pii_in_response(matched_text: str, category: str) -> str:
-    """Mask PII in API responses to prevent data exposure."""
+    """Mask PII in API responses."""
     if not category.startswith("pii_"):
         return matched_text
-    
     if len(matched_text) <= 4:
         return "***"
-    
-    # Show first 2 and last 2 characters
     return f"{matched_text[:2]}{'*' * (len(matched_text) - 4)}{matched_text[-2:]}"
+
+
+async def get_api_key(
+    api_key: str = Security(api_key_header),
+    request: Request = None
+) -> dict:
+    """Validate API key with Swagger UI support."""
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "authentication_required",
+                "message": "API key required. Include X-API-Key header."
+            }
+        )
+    
+    from .middleware import get_auth
+    auth = get_auth()
+    is_valid, tenant_info = auth.validate(api_key)
+    
+    if not is_valid:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "invalid_api_key",
+                "message": "Invalid API key."
+            }
+        )
+    
+    return tenant_info
 
 
 # === Endpoints ===
@@ -186,13 +210,12 @@ async def health_check():
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_text(
     request: AnalyzeRequest,
-    tenant: dict = Depends(require_api_key)
+    tenant: dict = Depends(get_api_key)
 ):
     """
     Analyze text for PII, toxicity, prompt injection, and finance intent.
     Requires valid API key.
     """
-    # Build policy from request
     policy = PolicyConfig(
         detect_pii=request.detect_pii,
         detect_toxicity=request.detect_toxicity,
@@ -203,20 +226,22 @@ async def analyze_text(
         pii_confidence_threshold=request.pii_confidence_threshold,
     )
     
-    # Analyze
     result = restrictor.analyze(request.text, policy=policy)
     
-    # Cache request for feedback
-    storage = get_feedback_storage()
-    storage.cache_request(
-        request_id=result.request_id,
-        input_hash=result.input_hash,
-        input_length=len(request.text),
-        decision=result.action.value,
-        categories=[c.value for c in result.categories_found],
-        confidence=result.max_confidence,
-        tenant_id=tenant.get("tenant_id")
-    )
+    # Cache for feedback
+    try:
+        storage = get_feedback_storage()
+        storage.cache_request(
+            request_id=result.request_id,
+            input_hash=result.input_hash,
+            input_length=len(request.text),
+            decision=result.action.value,
+            categories=[c.value for c in result.categories_found],
+            confidence=result.max_confidence,
+            tenant_id=tenant.get("tenant_id") if tenant else None
+        )
+    except Exception as e:
+        logger.warning(f"Failed to cache request: {e}")
     
     # Build response with masked PII
     detections = []
@@ -249,16 +274,13 @@ async def analyze_text(
 @app.post("/analyze/batch")
 async def analyze_batch(
     texts: List[str],
-    tenant: dict = Depends(require_api_key)
+    tenant: dict = Depends(get_api_key)
 ):
     """Analyze multiple texts. Requires valid API key."""
     if len(texts) > 100:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "batch_too_large",
-                "message": "Maximum 100 texts per batch"
-            }
+            detail={"error": "batch_too_large", "message": "Maximum 100 texts per batch"}
         )
     
     results = []
@@ -277,7 +299,7 @@ async def analyze_batch(
 @app.post("/feedback")
 async def submit_feedback(
     request: FeedbackSubmitRequest,
-    tenant: dict = Depends(require_api_key)
+    tenant: dict = Depends(get_api_key)
 ):
     """Submit feedback on a detection. Requires valid API key."""
     storage = get_feedback_storage()
@@ -287,10 +309,7 @@ async def submit_feedback(
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "invalid_feedback_type",
-                "message": "Invalid feedback type"
-            }
+            detail={"error": "invalid_feedback_type", "message": "Invalid feedback type"}
         )
     
     record = storage.store_feedback(
@@ -298,7 +317,7 @@ async def submit_feedback(
         feedback_type=feedback_type,
         corrected_category=request.corrected_category,
         comment=request.comment,
-        tenant_id=tenant.get("tenant_id")
+        tenant_id=tenant.get("tenant_id") if tenant else None
     )
     
     if record:
@@ -310,33 +329,25 @@ async def submit_feedback(
     else:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": "request_not_found",
-                "message": "Request ID not found or expired"
-            }
+            detail={"error": "request_not_found", "message": "Request ID not found or expired"}
         )
 
 
 @app.get("/feedback/stats")
-async def get_feedback_stats(tenant: dict = Depends(require_api_key)):
+async def get_feedback_stats(tenant: dict = Depends(get_api_key)):
     """Get feedback statistics. Requires valid API key."""
     storage = get_feedback_storage()
-    return storage.get_feedback_stats(tenant_id=tenant.get("tenant_id"))
+    return storage.get_feedback_stats(tenant_id=tenant.get("tenant_id") if tenant else None)
 
 
 @app.get("/categories")
-async def list_categories(tenant: dict = Depends(require_api_key)):
+async def list_categories(tenant: dict = Depends(get_api_key)):
     """List all detection categories. Requires valid API key."""
     from ..models import Category
-    return {
-        "categories": [
-            {"name": c.name, "value": c.value}
-            for c in Category
-        ]
-    }
+    return {"categories": [{"name": c.name, "value": c.value} for c in Category]}
 
 
 @app.get("/usage")
-async def get_usage(tenant: dict = Depends(require_api_key)):
+async def get_usage(tenant: dict = Depends(get_api_key)):
     """Get API usage statistics including Claude API costs."""
     return restrictor.get_api_usage()
