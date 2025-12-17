@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from ..models import Detection, Category, Severity
+from .input_sanitizer import get_sanitizer
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,13 @@ class ClaudeDetector:
                 self.usage.blocked_requests += 1
             return []
         
-        prompt = self._build_prompt(text, context)
+        # Sanitize input before sending to Claude
+        sanitizer = get_sanitizer()
+        sanitized = sanitizer.sanitize(text)
+        if sanitized.was_modified:
+            logger.info(f"Input sanitized before Claude: {sanitized.removals}")
+        
+        prompt = self._build_prompt(sanitized.sanitized, context)
         
         try:
             response = self.client.messages.create(
