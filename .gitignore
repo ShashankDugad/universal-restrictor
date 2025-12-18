@@ -44,3 +44,7 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Prometheus & Grafana data
+data/prometheus/
+data/grafana/
