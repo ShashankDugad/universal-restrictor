@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from ..models import Detection, Category, Severity
+from .usage_tracker import get_usage_tracker
 from .input_sanitizer import get_sanitizer
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,11 @@ class ClaudeDetector:
         with self._lock:
             self.usage.total_input_tokens += input_tokens
             self.usage.total_output_tokens += output_tokens
+            
+            # Persist to Redis
+            tracker = get_usage_tracker()
+            cost = (input_tokens * 0.25 / 1_000_000) + (output_tokens * 1.25 / 1_000_000)
+            tracker.record_usage(input_tokens, output_tokens, cost)
             self.usage.total_requests += 1
             self.usage.request_timestamps.append(time.time())
             

@@ -365,6 +365,13 @@ async def list_categories(tenant: dict = Depends(get_api_key)):
 @app.get("/usage")
 async def get_usage(tenant: dict = Depends(get_api_key)):
     """Get API usage statistics including Claude API costs."""
+    from restrictor.detectors.usage_tracker import get_usage_tracker
+    
+    tracker = get_usage_tracker()
+    if tracker.is_connected:
+        return tracker.get_usage()
+    
+    # Fallback to in-memory stats
     return restrictor.get_api_usage()
 
 

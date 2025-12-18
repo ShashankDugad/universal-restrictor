@@ -7,6 +7,7 @@ from .finance_intent import FinanceIntentDetector
 from .escalation_classifier import EscalationClassifier
 from .claude_detector import ClaudeDetector
 from .input_sanitizer import InputSanitizer, get_sanitizer
+from .usage_tracker import UsageTracker, get_usage_tracker
 
 __all__ = [
     "PIIDetector",
@@ -17,4 +18,6 @@ __all__ = [
     "ClaudeDetector",
     "InputSanitizer",
     "get_sanitizer",
+    "UsageTracker",
+    "get_usage_tracker",
 ]

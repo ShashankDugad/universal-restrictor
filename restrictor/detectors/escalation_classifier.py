@@ -10,6 +10,9 @@ This saves Claude API costs by only escalating ambiguous cases.
 """
 
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import List
 from dataclasses import dataclass
 
