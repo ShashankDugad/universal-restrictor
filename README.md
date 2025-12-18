@@ -166,6 +166,48 @@ curl http://localhost:8000/admin/learned-patterns \
   -H "X-API-Key: your-api-key"
 ```
 
+
+## Monitoring (Prometheus + Grafana)
+
+### Start Monitoring Stack
+```bash
+# Prometheus (metrics database)
+docker run -d --name prometheus -p 9090:9090 \
+  -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml \
+  -v $(pwd)/data/prometheus:/prometheus \
+  prom/prometheus
+
+# Grafana (dashboards)
+docker run -d --name grafana -p 3001:3000 \
+  -v $(pwd)/data/grafana:/var/lib/grafana \
+  grafana/grafana
+```
+
+### URLs
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Metrics endpoint | http://localhost:8000/metrics | - |
+| Prometheus | http://localhost:9090 | - |
+| Grafana | http://localhost:3001 | admin/admin |
+
+### Grafana Setup
+
+1. Add Data Source: Connections → Prometheus → URL: `http://host.docker.internal:9090`
+2. Import Dashboard: Dashboards → Import → Upload `grafana-dashboard.json`
+
+### Available Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `restrictor_requests_total` | Total requests by endpoint, method, status |
+| `restrictor_request_latency_seconds` | Request latency histogram |
+| `restrictor_detections_total` | Detections by category and action |
+| `restrictor_actions_total` | Actions taken (allow/block/redact) |
+| `restrictor_claude_cost_usd_total` | Claude API cost |
+| `restrictor_rate_limit_hits_total` | Rate limit hits |
+| `restrictor_active_requests` | Currently processing requests |
+
 ## India-Specific PII
 
 | Pattern | Example | Category |

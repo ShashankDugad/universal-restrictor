@@ -154,6 +154,60 @@ JSON structured logging:
 | Learned Patterns | JSON file | Active learning output |
 | Audit Log | File | Compliance logging |
 
+
+## Monitoring & Observability
+
+### Prometheus Metrics
+
+Exposed at `/metrics` endpoint in Prometheus format.
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Restrictor API │────▶│   Prometheus    │────▶│     Grafana     │
+│  /metrics       │     │   (scrapes)     │     │   (dashboards)  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+### Key Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `restrictor_requests_total` | Counter | endpoint, method, status | Total API requests |
+| `restrictor_request_latency_seconds` | Histogram | endpoint | Request latency |
+| `restrictor_detections_total` | Counter | category, action | Detections by type |
+| `restrictor_actions_total` | Counter | action | Actions taken |
+| `restrictor_claude_requests_total` | Counter | status | Claude API calls |
+| `restrictor_claude_cost_usd_total` | Counter | - | Claude API cost |
+| `restrictor_rate_limit_hits_total` | Counter | limit_type | Rate limit hits |
+| `restrictor_active_requests` | Gauge | - | In-flight requests |
+
+### Alerting Examples
+```yaml
+# High error rate
+- alert: HighErrorRate
+  expr: rate(restrictor_requests_total{status=~"5.."}[5m]) > 0.1
+  for: 5m
+
+# Claude API cost spike
+- alert: HighClaudeCost
+  expr: increase(restrictor_claude_cost_usd_total[1h]) > 1
+  for: 10m
+
+# Rate limiting triggered
+- alert: RateLimitHits
+  expr: increase(restrictor_rate_limit_hits_total[5m]) > 10
+  for: 5m
+```
+
+### Data Retention
+
+| Component | Storage | Retention |
+|-----------|---------|-----------|
+| Prometheus | `data/prometheus/` | 30 days |
+| Grafana | `data/grafana/` | Permanent |
+| Redis (usage) | Redis | Permanent |
+| Redis (daily stats) | Redis | 7 days |
+
+
 ## Request Flow
 ```
 1. Request arrives with X-API-Key
