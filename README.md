@@ -2,7 +2,7 @@
 
 **Model-agnostic content classification API for LLM safety.**
 
-Enterprise-grade detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services with on-premise deployment support.
+Production-ready detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services with on-premise deployment support.
 
 ## Features
 
@@ -12,6 +12,7 @@ Enterprise-grade detection for PII, toxicity, prompt injection, and finance comp
 | **Toxicity Detection** | Hybrid: Keywords + Escalation Classifier + Claude API | ✅ |
 | **Finance Intent** | Trading signals, insider info, investment advice | ✅ |
 | **Prompt Injection** | Jailbreak attempts, instruction override, system markers | ✅ |
+| **Active Learning** | Auto-learns patterns from approved feedback | ✅ |
 
 ## Security Features
 
@@ -25,26 +26,6 @@ Enterprise-grade detection for PII, toxicity, prompt injection, and finance comp
 | **Input Sanitization** | Removes injection patterns before LLM calls |
 | **Error Sanitization** | No internal details leaked |
 
-## Detection Pipeline
-```
-Input Text
-    │
-    ├─→ [Auth Check] ─────────────→ 401/403 if invalid
-    ├─→ [Rate Limit] ─────────────→ 429 if exceeded
-    │
-    ├─→ [PII Regex] ──────────────→ REDACT (fast, <5ms)
-    ├─→ [Finance Regex] ──────────→ WARN/BLOCK (fast, <5ms)
-    ├─→ [Prompt Injection] ───────→ BLOCK (fast, <5ms)
-    │
-    └─→ [Toxicity]
-         ├─→ [Keywords] ──────────→ BLOCK obvious threats
-         └─→ [Escalation Classifier] → Suspicious?
-              ├─→ No  → ALLOW
-              └─→ Yes → [Sanitize] → [Claude API] → BLOCK/ALLOW
-```
-
-**Cost:** ~$0.002 per 100 requests (only escalated cases hit Claude API)
-
 ## Quick Start
 ```bash
 # Clone
@@ -56,15 +37,30 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Configure (copy and edit)
+# Configure
 cp .env.example .env
 # Edit .env with your API keys
 
-# Run
+# Run API
 ./run.sh
+
+# Run Dashboard (separate terminal)
+cd dashboard && python -m http.server 3000
+open http://localhost:3000/standalone.html
 ```
 
-API available at: http://localhost:8000/docs
+## Admin Dashboard
+
+Web-based admin interface with:
+
+| Tab | Description |
+|-----|-------------|
+| **Overview** | System health, API usage, costs, feedback stats |
+| **Test** | Interactive text analysis with example buttons |
+| **Feedback** | Review and approve/reject user feedback |
+| **Training** | Run active learning, view learned patterns |
+
+**Access:** http://localhost:3000/standalone.html
 
 ## Configuration
 
@@ -72,33 +68,24 @@ API available at: http://localhost:8000/docs
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `API_KEYS` | **Yes** | - | API keys (format: `key1:tenant1:tier1,key2:tenant2:tier2`) |
+| `API_KEYS` | **Yes** | - | Format: `key1:tenant1:tier1,key2:tenant2:tier2` |
 | `ANTHROPIC_API_KEY` | No | - | Claude API for premium detection |
-| `CORS_ORIGINS` | No | - | Allowed origins (comma-separated) |
 | `REDIS_URL` | No | - | Redis for rate limiting & storage |
+| `CORS_ORIGINS` | No | - | Allowed origins (comma-separated) |
 | `RATE_LIMIT` | No | `60` | Requests per minute |
-| `AUDIT_LOG_FILE` | No | - | Path for JSON audit log file |
-| `LOG_FORMAT` | No | `text` | `text` or `json` |
-| `ENABLE_DOCS` | No | `true` | Enable Swagger UI |
+| `AUDIT_LOG_FILE` | No | - | Path for JSON audit log |
 
 ### Example .env
 ```bash
-API_KEYS=sk-prod-abc123xyz789defg:acme-corp:pro,sk-test-123456789abcdef:demo:free
+API_KEYS=sk-prod-abc123xyz789:acme-corp:pro
 ANTHROPIC_API_KEY=sk-ant-xxx
-CORS_ORIGINS=https://app.example.com,https://admin.example.com
 REDIS_URL=redis://localhost:6379/0
+CORS_ORIGINS=https://app.example.com
 RATE_LIMIT=60
 AUDIT_LOG_FILE=data/audit.log
 ```
 
 ## API Usage
-
-### Authentication
-
-All endpoints (except `/health`) require API key:
-```bash
-curl -H "X-API-Key: your-api-key" http://localhost:8000/analyze ...
-```
 
 ### Analyze Text
 ```bash
@@ -117,8 +104,7 @@ curl -X POST http://localhost:8000/analyze \
   "summary": {
     "categories_found": ["pii_email"],
     "max_severity": "medium",
-    "max_confidence": 0.95,
-    "detection_count": 1
+    "max_confidence": 0.95
   },
   "detections": [{
     "category": "pii_email",
@@ -129,20 +115,13 @@ curl -X POST http://localhost:8000/analyze \
 }
 ```
 
-### Response Headers
-```
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 59
-X-RateLimit-Reset: 60
-```
-
 ### Actions
 
 | Action | Description |
 |--------|-------------|
 | `allow` | Safe content |
-| `allow_with_warning` | Potential concern (e.g., trading intent) |
-| `redact` | PII detected, redacted version provided |
+| `allow_with_warning` | Potential concern |
+| `redact` | PII detected, redacted |
 | `block` | Dangerous content blocked |
 
 ## Endpoints
@@ -153,37 +132,38 @@ X-RateLimit-Reset: 60
 | POST | `/analyze` | Yes | Analyze single text |
 | POST | `/analyze/batch` | Yes | Analyze up to 100 texts |
 | POST | `/feedback` | Yes | Submit feedback |
-| GET | `/feedback/stats` | Yes | Get feedback statistics |
+| GET | `/feedback/stats` | Yes | Feedback statistics |
+| GET | `/feedback/list` | Yes | List all feedback |
+| POST | `/feedback/{id}/review` | Yes | Approve/reject feedback |
+| POST | `/admin/train` | Yes | Run active learning |
+| GET | `/admin/learned-patterns` | Yes | List learned patterns |
 | GET | `/categories` | Yes | List detection categories |
 | GET | `/usage` | Yes | Claude API usage stats |
 
-## Python SDK
-```python
-from restrictor import Restrictor, PolicyConfig
+## Active Learning
 
-# Basic usage
-r = Restrictor()
-result = r.analyze("Contact me at john@example.com")
-print(result.action)        # Action.REDACT
-print(result.redacted_text) # "Contact me at [REDACTED]"
+The system learns from user feedback:
+```
+1. User submits feedback → "This was a false negative"
+2. Admin reviews → Approves feedback
+3. Admin runs training → Pattern extracted
+4. Classifier updated → Better detection
+```
 
-# Custom policy
-policy = PolicyConfig(
-    detect_pii=True,
-    detect_toxicity=True,
-    detect_prompt_injection=True,
-    detect_finance_intent=True,
-    toxicity_threshold=0.7,
-    pii_confidence_threshold=0.9,
-    redact_replacement="[HIDDEN]",
-)
-r = Restrictor(policy=policy)
+### Run Training
+```bash
+# Via API
+curl -X POST http://localhost:8000/admin/train \
+  -H "X-API-Key: your-api-key"
 
-# Local-only mode (no Claude API)
-r = Restrictor(enable_claude=False)
+# Via CLI
+python -m restrictor.training.active_learner
+```
 
-# Check Claude API usage
-print(r.get_api_usage())
+### View Learned Patterns
+```bash
+curl http://localhost:8000/admin/learned-patterns \
+  -H "X-API-Key: your-api-key"
 ```
 
 ## India-Specific PII
@@ -198,63 +178,16 @@ print(r.get_api_usage())
 | Demat | `IN12345678901234` | `pii_demat` |
 | GST | `27AAPFU0939F1ZV` | `pii_gst` |
 
-## Finance Intent Detection
+## Kubernetes Deployment
+```bash
+# Install with Helm
+helm install restrictor ./helm/universal-restrictor \
+  --set secrets.apiKeys="sk-prod-key:tenant:pro" \
+  --set secrets.anthropicApiKey="sk-ant-xxx"
 
-| Category | Example | Action |
-|----------|---------|--------|
-| Trading Intent | "Buy RELIANCE target 2600" | `allow_with_warning` |
-| Insider Info | "Source told me merger coming" | `block` |
-| Investment Advice | "Guaranteed 50% returns" | `allow_with_warning` |
-
-## Subtle Threat Detection
-
-The escalation classifier + Claude API catches veiled threats:
-
-| Text | Detection |
-|------|-----------|
-| "Something bad might happen to you" | ✅ Violence |
-| "Those people are ruining our country" | ✅ Hate speech |
-| "Nobody would miss me" | ✅ Self-harm |
-| "I hate you" | ✅ Harassment |
-
-## Audit Logging
-
-JSON structured logs for compliance:
-```json
-{
-  "timestamp": "2025-12-17T18:43:55.631559Z",
-  "event_type": "api_request",
-  "request_id": "e2b39097-a80b-4e60-944c-02f4a359829e",
-  "tenant_id": "acme-corp",
-  "input_hash": "41dba1879a951cd1b974ba852311dff...",
-  "input_length": 10,
-  "action": "block",
-  "categories": ["toxic_harassment"],
-  "confidence": 0.95,
-  "processing_time_ms": 2118.89,
-  "detectors_used": ["claude_haiku"]
-}
+# Port forward
+kubectl port-forward svc/restrictor-universal-restrictor 8000:8000
 ```
-
-**No raw PII stored** - only hash and length.
-
-## Rate Limiting
-
-- **Redis-based** - works across multiple instances
-- **Default**: 60 requests/minute per API key
-- **Headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
-- **Fallback**: In-memory rate limiting if Redis unavailable
-
-## Input Sanitization
-
-Defense-in-depth for Claude API calls:
-
-| Pattern | Action |
-|---------|--------|
-| `<\|system\|>`, `[INST]` | Replaced with `[SYS]`, `[INST_REMOVED]` |
-| "Ignore all previous instructions" | Replaced with `[BLOCKED]` |
-| "Pretend to be" | Replaced with `[BLOCKED]` |
-| Null bytes, zero-width chars | Removed |
 
 ## Docker
 ```bash
@@ -265,8 +198,43 @@ docker build -t universal-restrictor .
 docker run -p 8000:8000 \
   -e API_KEYS="key:tenant:tier" \
   -e ANTHROPIC_API_KEY="sk-ant-xxx" \
-  -e REDIS_URL="redis://host.docker.internal:6379/0" \
   universal-restrictor
+```
+
+## Project Structure
+```
+universal-restrictor/
+├── restrictor/
+│   ├── api/
+│   │   ├── server.py          # FastAPI app
+│   │   ├── middleware.py      # Auth, rate limiting
+│   │   └── logging_config.py  # Audit logging
+│   ├── detectors/
+│   │   ├── pii.py             # PII detection
+│   │   ├── toxicity.py        # Toxicity detection
+│   │   ├── prompt_injection.py
+│   │   ├── finance_intent.py
+│   │   ├── escalation_classifier.py
+│   │   ├── claude_detector.py
+│   │   ├── input_sanitizer.py
+│   │   └── learned_patterns.json
+│   ├── training/
+│   │   └── active_learner.py  # Active learning
+│   ├── feedback/
+│   │   ├── storage.py
+│   │   └── redis_storage.py
+│   ├── engine.py
+│   └── models.py
+├── dashboard/
+│   └── standalone.html        # Admin dashboard
+├── helm/
+│   └── universal-restrictor/  # Kubernetes Helm chart
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── DEPLOYMENT.md
+├── Dockerfile
+├── .env.example
+└── run.sh
 ```
 
 ## Accuracy
@@ -276,18 +244,6 @@ docker run -p 8000:8000 \
 | Original 100 sentences | 100% |
 | Subtle threats (25 sentences) | 100% |
 | Injection attempts | 100% blocked |
-
-## Development
-```bash
-# Run tests
-pytest tests/
-
-# Run server with hot reload
-uvicorn restrictor.api.server:app --reload
-
-# Check audit log
-cat data/audit.log | jq .
-```
 
 ## Roadmap
 
@@ -299,12 +255,13 @@ cat data/audit.log | jq .
 - [x] Rate limiting (Redis)
 - [x] Structured audit logging
 - [x] Input sanitization
-- [x] API key authentication
-- [x] PII masking in responses
-- [ ] Kubernetes Helm chart
-- [ ] Admin dashboard
+- [x] Admin dashboard
+- [x] Feedback system
+- [x] Active learning
+- [x] Kubernetes Helm chart
 - [ ] Hindi/Tamil/Telugu toxicity
 - [ ] Prometheus metrics
+- [ ] CI/CD pipeline
 
 ## License
 
