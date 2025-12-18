@@ -19,7 +19,8 @@ from ..engine import Restrictor
 from ..models import PolicyConfig
 from ..feedback.storage import get_feedback_storage
 from ..feedback.models import FeedbackType, FeedbackRequest
-from .middleware import RateLimitMiddleware, require_api_key
+from .middleware import RateLimitMiddleware, require_api_key, MetricsMiddleware
+from .metrics import record_detection
 from .logging_config import get_audit_logger
 
 # Configure logging
@@ -53,6 +54,9 @@ else:
         allow_methods=["GET", "POST"],
         allow_headers=["X-API-Key", "Content-Type"],
     )
+
+# Prometheus metrics middleware
+app.add_middleware(MetricsMiddleware)
 
 # Rate limiting
 RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
@@ -228,6 +232,10 @@ async def analyze_text(
     )
     
     result = restrictor.analyze(request.text, policy=policy)
+    
+    # Record Prometheus metrics
+    for detection in result.detections:
+        record_detection(detection.category.value, result.action.value)
     
     # Cache for feedback
     try:
@@ -511,3 +519,17 @@ async def get_learned_patterns(tenant: dict = Depends(get_api_key)):
             status_code=500,
             detail={"error": "fetch_failed", "message": str(e)}
         )
+
+
+# =============================================================================
+# Prometheus Metrics Endpoint
+# =============================================================================
+
+from starlette.responses import Response
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from restrictor.api.metrics import get_metrics
+    output, content_type = get_metrics()
+    return Response(content=output, media_type=content_type)

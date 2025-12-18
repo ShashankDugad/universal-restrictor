@@ -275,3 +275,42 @@ async def require_api_key(request: Request) -> dict:
 
 
 verify_api_key = require_api_key
+
+
+# =============================================================================
+# Prometheus Metrics Middleware
+# =============================================================================
+
+import time
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """Middleware to record Prometheus metrics for all requests."""
+    
+    async def dispatch(self, request: Request, call_next):
+        from restrictor.api.metrics import record_request, ACTIVE_REQUESTS
+        
+        # Skip metrics endpoint to avoid recursion
+        if request.url.path == "/metrics":
+            return await call_next(request)
+        
+        ACTIVE_REQUESTS.inc()
+        start_time = time.time()
+        
+        try:
+            response = await call_next(request)
+            duration = time.time() - start_time
+            
+            # Record metrics
+            record_request(
+                endpoint=request.url.path,
+                method=request.method,
+                status=response.status_code,
+                duration=duration
+            )
+            
+            return response
+        finally:
+            ACTIVE_REQUESTS.dec()

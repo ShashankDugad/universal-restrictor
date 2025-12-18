@@ -17,6 +17,13 @@ from threading import Lock
 
 from ..models import Detection, Category, Severity
 from .usage_tracker import get_usage_tracker
+
+# Try to import metrics (may not be available during init)
+try:
+    from ..api.metrics import record_claude_call, record_escalation
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
 from .input_sanitizer import get_sanitizer
 
 logger = logging.getLogger(__name__)
@@ -145,6 +152,16 @@ class ClaudeDetector:
             tracker = get_usage_tracker()
             cost = (input_tokens * 0.25 / 1_000_000) + (output_tokens * 1.25 / 1_000_000)
             tracker.record_usage(input_tokens, output_tokens, cost)
+            
+            # Record Prometheus metrics
+            if METRICS_AVAILABLE:
+                record_claude_call(
+                    success=True,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                    latency=0  # Will be set by caller
+                )
             self.usage.total_requests += 1
             self.usage.request_timestamps.append(time.time())
             
