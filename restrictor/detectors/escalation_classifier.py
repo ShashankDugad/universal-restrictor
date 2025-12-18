@@ -131,6 +131,9 @@ class EscalationClassifier:
             for pattern, category in self.suspicious_patterns
         ]
         
+        # Load learned patterns from active learning
+        self._load_learned_patterns()
+        
         # Safe patterns - definitely safe, don't escalate
         self.safe_patterns = [
             r'(?i)^(hi|hello|hey|thanks|thank you|please|okay|ok|yes|no|sure)[\s\.\!\?]*$',
@@ -197,3 +200,28 @@ class EscalationClassifier:
             confidence=0.7,
             triggered_patterns=[]
         )
+
+
+    def _load_learned_patterns(self):
+        """Load patterns from active learning."""
+        try:
+            from ..training.active_learner import ActiveLearner
+            learner = ActiveLearner()
+            learned = learner.get_learned_patterns()
+            
+            if learned:
+                for pattern, name in learned:
+                    try:
+                        compiled = re.compile(pattern)
+                        self.suspicious_patterns.append((compiled, name))
+                    except re.error as e:
+                        logger.warning(f"Invalid learned pattern {name}: {e}")
+                
+                logger.info(f"Loaded {len(learned)} learned patterns")
+        except Exception as e:
+            logger.warning(f"Could not load learned patterns: {e}")
+    
+    def reload_patterns(self):
+        """Reload all patterns including learned ones."""
+        # Re-initialize base patterns
+        self.__init__()

@@ -457,3 +457,50 @@ async def review_feedback(
             raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
     
     raise HTTPException(status_code=500, detail={"error": "storage_unavailable", "message": "Storage not available"})
+
+
+@app.post("/admin/train")
+async def run_training(tenant: dict = Depends(get_api_key)):
+    """Run active learning training job. Requires valid API key."""
+    try:
+        from restrictor.training.active_learner import ActiveLearner
+        
+        learner = ActiveLearner()
+        result = learner.run_training()
+        
+        return {
+            "status": "completed",
+            "feedback_processed": result.feedback_processed,
+            "patterns_added": result.patterns_added,
+            "patterns_skipped": result.patterns_skipped,
+            "errors": result.errors,
+            "timestamp": result.timestamp
+        }
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "training_failed", "message": str(e)}
+        )
+
+
+@app.get("/admin/learned-patterns")
+async def get_learned_patterns(tenant: dict = Depends(get_api_key)):
+    """Get list of learned patterns from active learning."""
+    try:
+        from restrictor.training.active_learner import ActiveLearner
+        
+        learner = ActiveLearner()
+        data = learner.load_learned_patterns()
+        
+        return {
+            "patterns": data.get("patterns", []),
+            "metadata": data.get("metadata", {}),
+            "count": len(data.get("patterns", []))
+        }
+    except Exception as e:
+        logger.error(f"Failed to get learned patterns: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "fetch_failed", "message": str(e)}
+        )
