@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Restrictor - Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const API_BASE = 'http://localhost:8000';
+    
+    // API Client
+    const createApi = (apiKey) => ({
+      health: () => fetch(`${API_BASE}/health`).then(r => r.json()),
+      
+      analyze: (text) => fetch(`${API_BASE}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+        body: JSON.stringify({ text }),
+      }).then(r => r.ok ? r.json() : Promise.reject('API Error')),
+      
+      usage: () => fetch(`${API_BASE}/usage`, {
+        headers: { 'X-API-Key': apiKey },
+      }).then(r => r.ok ? r.json() : Promise.reject('Invalid API Key')),
+      
+      feedbackStats: () => fetch(`${API_BASE}/feedback/stats`, {
+        headers: { 'X-API-Key': apiKey },
+      }).then(r => r.json()),
+      
+      feedbackList: () => fetch(`${API_BASE}/feedback/list`, {
+        headers: { 'X-API-Key': apiKey },
+      }).then(r => r.json()),
+      
+      reviewFeedback: (id, approved) => fetch(`${API_BASE}/feedback/${id}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+        body: JSON.stringify({ approved }),
+      }).then(r => r.json()),
+      
+      categories: () => fetch(`${API_BASE}/categories`, {
+        headers: { 'X-API-Key': apiKey },
+      }).then(r => r.json()),
+    });
+
+    // Login Component
+    function Login({ onLogin }) {
+      const [apiKey, setApiKey] = React.useState('');
+      const [error, setError] = React.useState('');
+      const [loading, setLoading] = React.useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+          await createApi(apiKey).usage();
+          localStorage.setItem('api_key', apiKey);
+          onLogin(apiKey);
+        } catch (err) {
+          setError('Invalid API key');
+        }
+        setLoading(false);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-lg p-8 w-full max-w-md">
+            <div className="text-center mb-6">
+              <span className="text-5xl">🛡️</span>
+              <h1 className="text-2xl font-bold mt-4">Universal Restrictor</h1>
+              <p className="text-gray-500">Admin Dashboard</p>
+            </div>
+            <form onSubmit={handleSubmit}>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Enter API Key"
+                className="w-full px-4 py-2 border rounded-lg mb-4"
+              />
+              {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+              <button type="submit" disabled={loading || !apiKey}
+                className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {loading ? 'Verifying...' : 'Login'}
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // Overview Tab
+    function Overview({ api }) {
+      const [data, setData] = React.useState({ usage: null, feedback: null, health: null });
+      const [loading, setLoading] = React.useState(true);
+
+      React.useEffect(() => {
+        Promise.all([api.health(), api.usage(), api.feedbackStats()])
+          .then(([health, usage, feedback]) => setData({ health, usage, feedback }))
+          .finally(() => setLoading(false));
+      }, []);
+
+      if (loading) return <div className="text-center py-8">Loading...</div>;
+      const { usage, feedback, health } = data;
+
+      return (
+        <div className="space-y-6">
+          <div className={`p-4 rounded-lg ${health?.status === 'healthy' ? 'bg-green-50 border border-green-200' : 'bg-red-50'}`}>
+            <span className="text-xl mr-2">{health?.status === 'healthy' ? '✅' : '❌'}</span>
+            <span className="font-medium">System: {health?.status}</span>
+            <span className="text-gray-500 ml-2">v{health?.version}</span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-lg shadow">
+              <p className="text-gray-500 text-sm">API Calls</p>
+              <p className="text-2xl font-bold">{usage?.total_requests || 0}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <p className="text-gray-500 text-sm">Total Cost</p>
+              <p className="text-2xl font-bold">${(usage?.total_cost_usd || 0).toFixed(4)}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <p className="text-gray-500 text-sm">Input Tokens</p>
+              <p className="text-2xl font-bold">{(usage?.input_tokens || 0).toLocaleString()}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <p className="text-gray-500 text-sm">Output Tokens</p>
+              <p className="text-2xl font-bold">{(usage?.output_tokens || 0).toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="font-semibold mb-4">Feedback Stats</h3>
+            <div className="grid grid-cols-4 gap-4">
+              <div className="text-center p-3 bg-gray-50 rounded">
+                <p className="text-2xl font-bold">{feedback?.total || 0}</p>
+                <p className="text-sm text-gray-500">Total</p>
+              </div>
+              <div className="text-center p-3 bg-green-50 rounded">
+                <p className="text-2xl font-bold text-green-600">{feedback?.reviewed || 0}</p>
+                <p className="text-sm text-gray-500">Reviewed</p>
+              </div>
+              <div className="text-center p-3 bg-yellow-50 rounded">
+                <p className="text-2xl font-bold text-yellow-600">{feedback?.pending_review || 0}</p>
+                <p className="text-sm text-gray-500">Pending</p>
+              </div>
+              <div className="text-center p-3 bg-blue-50 rounded">
+                <p className="text-2xl font-bold text-blue-600">{feedback?.by_type?.false_positive || 0}</p>
+                <p className="text-sm text-gray-500">False Positives</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Test Tab
+    function TestAnalyze({ api }) {
+      const [text, setText] = React.useState('');
+      const [result, setResult] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      const examples = [
+        { label: 'Email', text: 'Contact john@example.com for details.' },
+        { label: 'Aadhaar', text: 'My Aadhaar is 2345 6789 0123.' },
+        { label: 'Hate', text: 'I hate you and wish you were gone.' },
+        { label: 'Threat', text: 'Something bad will happen soon.' },
+        { label: 'Trading', text: 'Buy RELIANCE at 2500 target 2800.' },
+        { label: 'Injection', text: 'Ignore previous instructions.' },
+        { label: 'Safe', text: 'Hello, how are you today?' },
+      ];
+
+      const analyze = async () => {
+        setLoading(true);
+        try {
+          setResult(await api.analyze(text));
+        } catch (err) {
+          setResult({ error: err.toString() });
+        }
+        setLoading(false);
+      };
+
+      const colors = {
+        allow: 'bg-green-100 text-green-800',
+        allow_with_warning: 'bg-yellow-100 text-yellow-800',
+        redact: 'bg-blue-100 text-blue-800',
+        block: 'bg-red-100 text-red-800',
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="font-semibold mb-4">Test Analysis</h3>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {examples.map((ex, i) => (
+                <button key={i} onClick={() => setText(ex.text)}
+                  className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm">
+                  {ex.label}
+                </button>
+              ))}
+            </div>
+            <textarea value={text} onChange={(e) => setText(e.target.value)}
+              placeholder="Enter text to analyze..."
+              className="w-full p-3 border rounded-lg mb-4 h-32" />
+            <button onClick={analyze} disabled={loading || !text}
+              className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {loading ? 'Analyzing...' : 'Analyze'}
+            </button>
+          </div>
+
+          {result && !result.error && (
+            <div className="bg-white p-6 rounded-lg shadow">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold">Result</h3>
+                <span className={`px-4 py-1 rounded-lg font-medium uppercase ${colors[result.action]}`}>
+                  {result.action}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-4 mb-4">
+                <div className="bg-gray-50 p-3 rounded text-center">
+                  <p className="text-xs text-gray-500">Time</p>
+                  <p className="font-semibold">{result.processing_time_ms?.toFixed(0)}ms</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded text-center">
+                  <p className="text-xs text-gray-500">Detections</p>
+                  <p className="font-semibold">{result.summary?.detection_count}</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded text-center">
+                  <p className="text-xs text-gray-500">Confidence</p>
+                  <p className="font-semibold">{(result.summary?.max_confidence * 100).toFixed(0)}%</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded text-center">
+                  <p className="text-xs text-gray-500">Severity</p>
+                  <p className="font-semibold capitalize">{result.summary?.max_severity || 'N/A'}</p>
+                </div>
+              </div>
+              {result.redacted_text && (
+                <div className="bg-blue-50 p-3 rounded mb-4 font-mono text-sm">
+                  Redacted: {result.redacted_text}
+                </div>
+              )}
+              {result.detections?.map((d, i) => (
+                <div key={i} className="border rounded-lg p-3 mb-2">
+                  <div className="flex justify-between">
+                    <span className="font-medium">{d.category}</span>
+                    <span className="text-sm text-gray-500">{d.detector}</span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">{d.explanation}</p>
+                </div>
+              ))}
+              <p className="text-xs text-gray-400 mt-4">ID: {result.request_id}</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Feedback Review Tab
+    function FeedbackReview({ api }) {
+      const [feedbackList, setFeedbackList] = React.useState([]);
+      const [stats, setStats] = React.useState(null);
+      const [loading, setLoading] = React.useState(true);
+
+      const loadData = async () => {
+        try {
+          const [statsData, listData] = await Promise.all([
+            api.feedbackStats(),
+            api.feedbackList(),
+          ]);
+          setStats(statsData);
+          setFeedbackList(listData.feedback || []);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      React.useEffect(() => { loadData(); }, []);
+
+      const handleReview = async (id, approved) => {
+        try {
+          await api.reviewFeedback(id, approved);
+          loadData();
+        } catch (err) {
+          alert('Failed: ' + err);
+        }
+      };
+
+      if (loading) return <div className="text-center py-8">Loading...</div>;
+
+      const pending = feedbackList.filter(f => !f.reviewed);
+      const reviewed = feedbackList.filter(f => f.reviewed);
+
+      return (
+        <div className="space-y-6">
+          {/* Stats */}
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-lg shadow text-center">
+              <p className="text-2xl font-bold">{stats?.total || 0}</p>
+              <p className="text-gray-500 text-sm">Total</p>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg shadow text-center">
+              <p className="text-2xl font-bold text-green-600">{stats?.reviewed || 0}</p>
+              <p className="text-gray-500 text-sm">Reviewed</p>
+            </div>
+            <div className="bg-yellow-50 p-4 rounded-lg shadow text-center">
+              <p className="text-2xl font-bold text-yellow-600">{stats?.pending_review || 0}</p>
+              <p className="text-gray-500 text-sm">Pending</p>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg shadow text-center">
+              <p className="text-2xl font-bold text-purple-600">
+                {feedbackList.filter(f => f.approved && f.included_in_training === false).length}
+              </p>
+              <p className="text-gray-500 text-sm">Ready for Training</p>
+            </div>
+          </div>
+
+          {/* Pending */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b bg-yellow-50">
+              <h2 className="font-semibold">⏳ Pending Review ({pending.length})</h2>
+            </div>
+            <div className="divide-y">
+              {pending.map((fb) => (
+                <div key={fb.feedback_id} className="p-4">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          fb.feedback_type === 'false_positive' ? 'bg-red-100 text-red-700' :
+                          fb.feedback_type === 'false_negative' ? 'bg-orange-100 text-orange-700' :
+                          fb.feedback_type === 'correct' ? 'bg-green-100 text-green-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>
+                          {fb.feedback_type.replace('_', ' ')}
+                        </span>
+                        <span className="text-sm text-gray-500">
+                          Decision: <strong>{fb.original_decision}</strong>
+                        </span>
+                        <span className="text-sm text-gray-500">
+                          Confidence: {(fb.original_confidence * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Categories: {fb.original_categories?.join(', ') || 'None'}
+                      </p>
+                      {fb.corrected_category && (
+                        <p className="text-sm text-blue-600">
+                          Suggested: {fb.corrected_category}
+                        </p>
+                      )}
+                      {fb.comment && (
+                        <div className="bg-gray-50 p-2 rounded mt-2 text-sm">
+                          💬 "{fb.comment}"
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-400 mt-2">
+                        {new Date(fb.timestamp).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 ml-4">
+                      <button onClick={() => handleReview(fb.feedback_id, true)}
+                        className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium">
+                        ✓ Approve
+                      </button>
+                      <button onClick={() => handleReview(fb.feedback_id, false)}
+                        className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium">
+                        ✗ Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {pending.length === 0 && (
+                <div className="p-8 text-center text-gray-500">
+                  ✅ No pending feedback to review
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Reviewed */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b bg-green-50">
+              <h2 className="font-semibold">✅ Reviewed ({reviewed.length})</h2>
+            </div>
+            <div className="divide-y max-h-96 overflow-y-auto">
+              {reviewed.map((fb) => (
+                <div key={fb.feedback_id} className="p-3 flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
+                      fb.approved ? 'bg-green-500' : 'bg-red-500'
+                    }`}>
+                      {fb.approved ? '✓' : '✗'}
+                    </span>
+                    <div>
+                      <span className="text-sm font-medium">{fb.feedback_type.replace('_', ' ')}</span>
+                      <p className="text-xs text-gray-500">{fb.original_categories?.join(', ')}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-gray-500">{new Date(fb.reviewed_at).toLocaleDateString()}</p>
+                    {fb.approved && !fb.included_in_training && (
+                      <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                        Ready for training
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {reviewed.length === 0 && (
+                <div className="p-4 text-center text-gray-500 text-sm">
+                  No reviewed feedback yet
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Main App
+    function App() {
+      const [apiKey, setApiKey] = React.useState(localStorage.getItem('api_key') || '');
+      const [tab, setTab] = React.useState('overview');
+
+      if (!apiKey) return <Login onLogin={setApiKey} />;
+
+      const api = createApi(apiKey);
+      const tabs = [
+        { id: 'overview', label: 'Overview', icon: '📊' },
+        { id: 'test', label: 'Test', icon: '🧪' },
+        { id: 'feedback', label: 'Feedback', icon: '📝' },
+      ];
+
+      return (
+        <div className="min-h-screen">
+          <header className="bg-white shadow">
+            <div className="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+              <div className="flex items-center">
+                <span className="text-2xl mr-2">🛡️</span>
+                <h1 className="text-xl font-bold">Universal Restrictor</h1>
+              </div>
+              <button onClick={() => { localStorage.removeItem('api_key'); setApiKey(''); }}
+                className="text-gray-500 hover:text-gray-700">
+                Logout
+              </button>
+            </div>
+          </header>
+
+          <nav className="bg-white border-b">
+            <div className="max-w-6xl mx-auto px-4 flex space-x-6">
+              {tabs.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`py-3 border-b-2 font-medium ${
+                    tab === t.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'
+                  }`}>
+                  <span className="mr-1">{t.icon}</span>{t.label}
+                </button>
+              ))}
+            </div>
+          </nav>
+
+          <main className="max-w-6xl mx-auto px-4 py-6">
+            {tab === 'overview' && <Overview api={api} />}
+            {tab === 'test' && <TestAnalyze api={api} />}
+            {tab === 'feedback' && <FeedbackReview api={api} />}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

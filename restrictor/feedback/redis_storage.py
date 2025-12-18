@@ -5,7 +5,7 @@ Redis-based feedback storage with tenant support.
 import os
 import json
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from datetime import datetime, timedelta
 
 from .models import FeedbackType, FeedbackRecord
@@ -110,6 +110,7 @@ class RedisFeedbackStorage:
         # Create feedback record
         import uuid
         feedback_id = f"fb_{uuid.uuid4().hex[:12]}"
+        now = datetime.utcnow().isoformat()
         
         record = FeedbackRecord(
             feedback_id=feedback_id,
@@ -123,15 +124,33 @@ class RedisFeedbackStorage:
             feedback_type=feedback_type.value,
             corrected_category=corrected_category,
             comment=comment,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=now,
             reviewed=False,
             included_in_training=False
         )
         
         try:
+            # Convert to dict and ensure all values are JSON serializable
+            record_dict = {
+                "feedback_id": record.feedback_id,
+                "tenant_id": record.tenant_id,
+                "request_id": record.request_id,
+                "input_hash": record.input_hash,
+                "input_length": record.input_length,
+                "original_decision": record.original_decision,
+                "original_categories": record.original_categories,
+                "original_confidence": record.original_confidence,
+                "feedback_type": record.feedback_type,
+                "corrected_category": record.corrected_category,
+                "comment": record.comment,
+                "timestamp": now,
+                "reviewed": record.reviewed,
+                "included_in_training": record.included_in_training,
+            }
+            
             # Store feedback
             key = f"feedback:{feedback_id}"
-            self._client.set(key, json.dumps(record.__dict__))
+            self._client.set(key, json.dumps(record_dict))
             
             # Add to indexes
             self._client.sadd("feedback:all", feedback_id)
@@ -143,6 +162,7 @@ class RedisFeedbackStorage:
             # Invalidate stats cache
             self._client.delete("feedback:stats")
             
+            logger.info(f"Stored feedback {feedback_id} for request {request_id}")
             return record
             
         except Exception as e:

@@ -366,3 +366,94 @@ async def list_categories(tenant: dict = Depends(get_api_key)):
 async def get_usage(tenant: dict = Depends(get_api_key)):
     """Get API usage statistics including Claude API costs."""
     return restrictor.get_api_usage()
+
+
+@app.get("/feedback/list")
+async def list_feedback(tenant: dict = Depends(get_api_key)):
+    """List all feedback for review. Requires valid API key."""
+    storage = get_feedback_storage()
+    
+    # Get feedback list from Redis
+    if hasattr(storage, '_client') and storage.is_connected:
+        try:
+            feedback_ids = storage._client.smembers("feedback:all")
+            feedback_list = []
+            
+            for fid in feedback_ids:
+                fid = fid.decode() if isinstance(fid, bytes) else fid
+                data = storage._client.get(f"feedback:{fid}")
+                if data:
+                    import json
+                    record = json.loads(data)
+                    # Filter by tenant if needed
+                    if tenant.get("tenant_id") and record.get("tenant_id") != tenant.get("tenant_id"):
+                        continue
+                    feedback_list.append(record)
+            
+            # Sort by timestamp descending
+            feedback_list.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            
+            return {"feedback": feedback_list, "count": len(feedback_list)}
+        except Exception as e:
+            logger.error(f"Failed to list feedback: {e}")
+            return {"feedback": [], "count": 0}
+    
+    return {"feedback": [], "count": 0}
+
+
+@app.post("/feedback/{feedback_id}/review")
+async def review_feedback(
+    feedback_id: str,
+    review: dict,
+    tenant: dict = Depends(get_api_key)
+):
+    """Approve or reject feedback. Requires valid API key."""
+    storage = get_feedback_storage()
+    approved = review.get("approved", False)
+    
+    if hasattr(storage, '_client') and storage.is_connected:
+        try:
+            import json
+            key = f"feedback:{feedback_id}"
+            data = storage._client.get(key)
+            
+            if not data:
+                raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Feedback not found"})
+            
+            record = json.loads(data)
+            record["reviewed"] = True
+            record["approved"] = approved
+            record["reviewed_at"] = datetime.utcnow().isoformat()
+            record["reviewed_by"] = tenant.get("tenant_id")
+            
+            # If approved, mark for training
+            if approved:
+                record["included_in_training"] = False  # Will be picked up by training job
+            
+            storage._client.set(key, json.dumps(record))
+            
+            # Update stats cache
+            storage._client.delete("feedback:stats")
+            
+            # Log audit
+            audit = get_audit_logger()
+            audit.log_feedback(
+                feedback_id=feedback_id,
+                request_id=record.get("request_id", ""),
+                feedback_type=f"reviewed_{('approved' if approved else 'rejected')}",
+                tenant_id=tenant.get("tenant_id")
+            )
+            
+            return {
+                "feedback_id": feedback_id,
+                "status": "approved" if approved else "rejected",
+                "message": "Feedback reviewed successfully"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to review feedback: {e}")
+            raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
+    
+    raise HTTPException(status_code=500, detail={"error": "storage_unavailable", "message": "Storage not available"})
