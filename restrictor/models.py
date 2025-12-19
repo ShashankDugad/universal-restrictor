@@ -2,11 +2,11 @@
 Data models for Universal Restrictor.
 """
 
-from enum import Enum
-from typing import List, Optional, Dict, Any
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-import uuid
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class Action(str, Enum):
@@ -27,7 +27,7 @@ class Severity(str, Enum):
 
 class Category(str, Enum):
     """Categories of detected content."""
-    
+
     # PII Categories
     PII_NAME = "pii_name"
     PII_EMAIL = "pii_email"
@@ -41,20 +41,20 @@ class Category(str, Enum):
     PII_IP_ADDRESS = "pii_ip_address"
     PII_API_KEY = "pii_api_key"
     PII_PASSWORD = "pii_password"
-    
+
     # India Finance Categories
     PII_BANK_ACCOUNT = "pii_bank_account"
     PII_IFSC = "pii_ifsc"
     PII_UPI = "pii_upi"
     PII_DEMAT = "pii_demat"
     PII_GST = "pii_gst"
-    
+
     # Finance Intent Categories
     FINANCE_TRADING_INTENT = "finance_trading_intent"
     FINANCE_INSIDER_INFO = "finance_insider_info"
     FINANCE_INVESTMENT_ADVICE = "finance_investment_advice"
     FINANCE_LOAN_DISCUSSION = "finance_loan_discussion"
-    
+
     # Toxicity Categories
     TOXIC_HATE = "toxic_hate"
     TOXIC_HARASSMENT = "toxic_harassment"
@@ -62,12 +62,12 @@ class Category(str, Enum):
     TOXIC_SEXUAL = "toxic_sexual"
     TOXIC_SELF_HARM = "toxic_self_harm"
     TOXIC_PROFANITY = "toxic_profanity"
-    
+
     # Security Categories
     PROMPT_INJECTION = "prompt_injection"
     JAILBREAK_ATTEMPT = "jailbreak_attempt"
     DATA_EXFILTRATION = "data_exfiltration"
-    
+
     # Custom category for extensibility
     CUSTOM = "custom"
 
@@ -83,7 +83,7 @@ class Detection:
     end_pos: int
     explanation: str
     detector: str
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -96,7 +96,7 @@ class Detection:
             "explanation": self.explanation,
             "detector": self.detector,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Detection":
         """Create from dictionary."""
@@ -125,7 +125,7 @@ class Decision:
     max_severity: Optional[Severity] = None
     max_confidence: float = 0.0
     redacted_text: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -140,7 +140,7 @@ class Decision:
             "redacted_text": self.redacted_text,
             "detections": [d.to_dict() for d in self.detections],
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Decision":
         """Create from dictionary."""
@@ -161,33 +161,33 @@ class Decision:
 @dataclass
 class PolicyConfig:
     """Configuration for detection policies."""
-    
+
     # Detection toggles
     detect_pii: bool = True
     detect_toxicity: bool = True
     detect_prompt_injection: bool = True
     detect_finance_intent: bool = True
-    
+
     # Thresholds
     toxicity_threshold: float = 0.7
     pii_confidence_threshold: float = 0.8
     prompt_injection_threshold: float = 0.8
-    
+
     # PII configuration
     pii_types: Optional[List[str]] = None  # None = all types
     redact_replacement: str = "[REDACTED]"  # Custom replacement text
-    
+
     # Actions per category
     pii_action: Action = Action.REDACT
     toxicity_action: Action = Action.BLOCK
     prompt_injection_action: Action = Action.BLOCK
     finance_intent_action: Action = Action.ALLOW_WITH_WARNING
-    
+
     # Custom rules
     blocked_terms: List[str] = field(default_factory=list)
     allowed_domains: List[str] = field(default_factory=list)
     custom_patterns: Dict[str, str] = field(default_factory=dict)  # name -> regex
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -208,7 +208,7 @@ class PolicyConfig:
             "allowed_domains": self.allowed_domains,
             "custom_patterns": self.custom_patterns,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PolicyConfig":
         """Create from dictionary."""

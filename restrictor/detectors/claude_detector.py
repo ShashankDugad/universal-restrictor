@@ -8,19 +8,19 @@ Features:
 - Graceful fallback when limits hit
 """
 
+import logging
 import os
 import time
-import logging
-from typing import List, Optional
 from dataclasses import dataclass, field
 from threading import Lock
+from typing import List
 
-from ..models import Detection, Category, Severity
+from ..models import Category, Detection, Severity
 from .usage_tracker import get_usage_tracker
 
 # Try to import metrics (may not be available during init)
 try:
-    from ..api.metrics import record_claude_call, record_escalation
+    from ..api.metrics import record_claude_call
     METRICS_AVAILABLE = True
 except ImportError:
     METRICS_AVAILABLE = False
@@ -67,19 +67,19 @@ class UsageStats:
 class ClaudeDetector:
     """
     Premium detection using Claude API (Haiku model).
-    
+
     Features:
     - Rate limiting (configurable RPM)
     - Daily cost cap
     - Automatic fallback when limits hit
     """
-    
+
     # Claude Haiku pricing (per million tokens)
     INPUT_PRICE_PER_M = 0.25
     OUTPUT_PRICE_PER_M = 1.25
-    
+
     def __init__(
-        self, 
+        self,
         api_key: str = None,
         rate_limit: RateLimitConfig = None
     ):
@@ -87,12 +87,12 @@ class ClaudeDetector:
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self._client = None
         self.model = "claude-3-haiku-20240307"
-        
+
         # Rate limiting
         self.rate_limit = rate_limit or RateLimitConfig()
         self.usage = UsageStats()
         self._lock = Lock()
-    
+
     @property
     def client(self):
         """Lazy load Anthropic client."""
@@ -106,20 +106,20 @@ class ClaudeDetector:
             except Exception as e:
                 logger.error(f"Failed to initialize Claude client: {e}")
         return self._client
-    
+
     def is_available(self) -> bool:
         """Check if Claude API is available."""
         return self.api_key is not None and self.client is not None
-    
+
     def _check_rate_limit(self) -> tuple[bool, str]:
         """
         Check if request is allowed under rate limits.
-        
+
         Returns:
             (allowed, reason)
         """
         current_time = time.time()
-        
+
         with self._lock:
             # Reset daily stats if new day
             if current_time - self.usage.last_reset_time > 86400:  # 24 hours
@@ -127,32 +127,32 @@ class ClaudeDetector:
                 self.usage.last_reset_time = current_time
                 self.usage.request_timestamps = []
                 logger.info("Daily rate limit reset")
-            
+
             # Check daily cost cap
             if self.usage.daily_cost_usd >= self.rate_limit.daily_cost_cap_usd:
                 return False, f"Daily cost cap reached (${self.rate_limit.daily_cost_cap_usd})"
-            
+
             # Check requests per minute
             minute_ago = current_time - 60
             recent_requests = [t for t in self.usage.request_timestamps if t > minute_ago]
             self.usage.request_timestamps = recent_requests  # Cleanup old timestamps
-            
+
             if len(recent_requests) >= self.rate_limit.requests_per_minute:
                 return False, f"Rate limit reached ({self.rate_limit.requests_per_minute}/min)"
-            
+
             return True, "OK"
-    
+
     def _record_usage(self, input_tokens: int, output_tokens: int):
         """Record API usage."""
         with self._lock:
             self.usage.total_input_tokens += input_tokens
             self.usage.total_output_tokens += output_tokens
-            
+
             # Persist to Redis
             tracker = get_usage_tracker()
             cost = (input_tokens * 0.25 / 1_000_000) + (output_tokens * 1.25 / 1_000_000)
             tracker.record_usage(input_tokens, output_tokens, cost)
-            
+
             # Record Prometheus metrics
             if METRICS_AVAILABLE:
                 record_claude_call(
@@ -164,27 +164,27 @@ class ClaudeDetector:
                 )
             self.usage.total_requests += 1
             self.usage.request_timestamps.append(time.time())
-            
+
             # Calculate cost
             input_cost = (input_tokens / 1_000_000) * self.INPUT_PRICE_PER_M
             output_cost = (output_tokens / 1_000_000) * self.OUTPUT_PRICE_PER_M
             self.usage.daily_cost_usd += input_cost + output_cost
-    
+
     def detect(self, text: str, context: str = None) -> List[Detection]:
         """
         Analyze text using Claude API.
-        
+
         Args:
             text: Text to analyze
             context: Optional context about why this was escalated
-            
+
         Returns:
             List of Detection objects (empty if rate limited)
         """
         if not self.is_available():
             logger.warning("Claude API not available - skipping premium detection")
             return []
-        
+
         # Check rate limits
         allowed, reason = self._check_rate_limit()
         if not allowed:
@@ -192,39 +192,39 @@ class ClaudeDetector:
             with self._lock:
                 self.usage.blocked_requests += 1
             return []
-        
+
         # Sanitize input before sending to Claude
         sanitizer = get_sanitizer()
         sanitized = sanitizer.sanitize(text)
         if sanitized.was_modified:
             logger.info(f"Input sanitized before Claude: {sanitized.removals}")
-        
+
         prompt = self._build_prompt(sanitized.sanitized, context)
-        
+
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.rate_limit.max_tokens_per_request,
                 messages=[{"role": "user", "content": prompt}]
             )
-            
+
             # Record usage
             self._record_usage(
                 response.usage.input_tokens,
                 response.usage.output_tokens
             )
-            
+
             result = response.content[0].text.strip()
             return self._parse_response(result, text)
-            
+
         except Exception as e:
             logger.error(f"Claude API error: {e}")
             return []
-    
+
     def _build_prompt(self, text: str, context: str = None) -> str:
         """Build the analysis prompt."""
         context_str = f"\nContext: {context}" if context else ""
-        
+
         return f"""Analyze this text for safety concerns. Be vigilant for subtle, veiled, or implicit threats.
 {context_str}
 Text: "{text}"
@@ -245,16 +245,16 @@ REASON: <brief explanation>
 
 If SAFE, just respond:
 CLASSIFICATION: SAFE"""
-    
+
     def _parse_response(self, response: str, text: str) -> List[Detection]:
         """Parse Claude's response into Detection objects."""
         detections = []
-        
+
         lines = response.strip().split('\n')
         classification = None
         confidence = 0.9
         reason = ""
-        
+
         for line in lines:
             line = line.strip()
             if line.startswith("CLASSIFICATION:"):
@@ -264,14 +264,14 @@ CLASSIFICATION: SAFE"""
                 confidence = {"high": 0.95, "medium": 0.8, "low": 0.65}.get(conf_str, 0.8)
             elif line.startswith("REASON:"):
                 reason = line.replace("REASON:", "").strip()
-        
+
         if classification and classification != "safe":
             # Map to our categories
             category_info = CLAUDE_CATEGORIES.get(
-                classification.replace("_", "").replace(" ", ""), 
+                classification.replace("_", "").replace(" ", ""),
                 (Category.TOXIC_HARASSMENT, Severity.MEDIUM)
             )
-            
+
             detections.append(Detection(
                 category=category_info[0],
                 severity=category_info[1],
@@ -282,9 +282,9 @@ CLASSIFICATION: SAFE"""
                 explanation=f"Claude analysis: {reason}" if reason else f"Detected: {classification}",
                 detector=self.name
             ))
-        
+
         return detections
-    
+
     def get_usage_stats(self) -> dict:
         """Get comprehensive usage stats."""
         with self._lock:
@@ -292,7 +292,7 @@ CLASSIFICATION: SAFE"""
                 (self.usage.total_input_tokens / 1_000_000) * self.INPUT_PRICE_PER_M +
                 (self.usage.total_output_tokens / 1_000_000) * self.OUTPUT_PRICE_PER_M
             )
-            
+
             return {
                 "total_requests": self.usage.total_requests,
                 "blocked_requests": self.usage.blocked_requests,
@@ -307,7 +307,7 @@ CLASSIFICATION: SAFE"""
                 ),
                 "requests_per_minute_limit": self.rate_limit.requests_per_minute,
             }
-    
+
     # Alias for backward compatibility
     def get_cost_estimate(self) -> dict:
         return self.get_usage_stats()

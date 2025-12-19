@@ -1,17 +1,17 @@
 """Detectors package."""
 
-from .pii import PIIDetector
-from .toxicity import ToxicityDetector
-from .prompt_injection import PromptInjectionDetector
-from .finance_intent import FinanceIntentDetector
-from .escalation_classifier import EscalationClassifier
 from .claude_detector import ClaudeDetector
+from .escalation_classifier import EscalationClassifier
+from .finance_intent import FinanceIntentDetector
 from .input_sanitizer import InputSanitizer, get_sanitizer
+from .pii import PIIDetector
+from .prompt_injection import PromptInjectionDetector
+from .toxicity import ToxicityDetector
 from .usage_tracker import UsageTracker, get_usage_tracker
 
 __all__ = [
     "PIIDetector",
-    "ToxicityDetector", 
+    "ToxicityDetector",
     "PromptInjectionDetector",
     "FinanceIntentDetector",
     "EscalationClassifier",

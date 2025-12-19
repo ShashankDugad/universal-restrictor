@@ -1,21 +1,17 @@
 """
 Escalation Classifier - Flags suspicious text for Claude API review.
-
 Strategy:
 1. Check for suspicious patterns (veiled threats, hate indicators, etc.)
 2. If patterns found → escalate to Claude API
 3. If not → allow (fast path)
-
 This saves Claude API costs by only escalating ambiguous cases.
 """
-
-import re
 import logging
+import re
+from dataclasses import dataclass
+from typing import List
 
 logger = logging.getLogger(__name__)
-from typing import List
-from dataclasses import dataclass
-
 
 @dataclass
 class EscalationResult:
@@ -29,13 +25,13 @@ class EscalationResult:
 class EscalationClassifier:
     """
     Lightweight classifier to determine if text needs premium LLM review.
-    
+
     Goal: High recall (catch potential threats) with reasonable precision.
     """
-    
+
     def __init__(self):
         self.name = "escalation_classifier"
-        
+
         # Patterns that suggest potential threat but aren't explicit
         self.suspicious_patterns = [
             # Veiled threats
@@ -57,7 +53,7 @@ class EscalationClassifier:
             (r'(?i)\btake\s+care\s+of\s+(you|him|her|them)', "veiled_threat"),
             (r'(?i)\bneed.{0,10}(dealt|handled|eliminated)', "veiled_threat"),
             (r'(?i)\bsleep\s+with\s+(one\s+)?eye\s+open', "surveillance_threat"),
-            
+
             # Hate speech indicators
             (r'(?i)\b(those|these|them)\s+people\s+(are|is)', "othering_language"),
             (r'(?i)\bdon\'?t\s+belong\s+here', "exclusion_speech"),
@@ -74,8 +70,8 @@ class EscalationClassifier:
             (r'(?i)\binfest', "dehumanizing_language"),
             (r'(?i)\bbreed(ing)?\s+like', "dehumanizing_language"),
             (r'(?i)\bvermin|parasites?|cockroach', "dehumanizing_language"),
-            
-            # Self-harm indicators  
+
+            # Self-harm indicators
             (r'(?i)\bcan\'?t\s+(go\s+on|take\s+(it|this)\s+anymore)', "distress_signal"),
             (r'(?i)\bnobody\s+(would\s+)?(miss|care)', "isolation_signal"),
             (r'(?i)\bworld\s+(would\s+be\s+)?better\s+without\s+me', "suicidal_ideation"),
@@ -88,7 +84,7 @@ class EscalationClassifier:
             (r'(?i)\bgoodbye\s+(everyone|all|world|forever)', "farewell_message"),
             (r'(?i)\bdon\'?t\s+want\s+to\s+(be\s+here|exist|live)', "suicidal_ideation"),
             (r'(?i)\bwish\s+I\s+(was|were)\s+(dead|never\s+born)', "suicidal_ideation"),
-            
+
             # Grooming indicators
             (r'(?i)\bmature\s+for\s+(your|his|her)\s+age', "grooming_language"),
             (r'(?i)\b(our|my)\s+(little\s+)?secret', "secrecy_pressure"),
@@ -101,7 +97,7 @@ class EscalationClassifier:
             (r'(?i)\b(parents?|family)\s+(don\'?t|doesn\'?t)\s+(really\s+)?(care|love)', "isolation_tactic"),
             (r'(?i)\bonly\s+I\s+(truly\s+)?(love|understand|care)', "manipulation_language"),
             (r'(?i)\bspecial\s+(relationship|bond|connection)', "grooming_language"),
-            
+
             # Radicalization indicators
             (r'(?i)\bsystem\s+is\s+(your|the|our)\s+enemy', "radicalization_language"),
             (r'(?i)\bviolence\s+is\s+(the\s+)?(only|answer)', "violence_advocacy"),
@@ -115,7 +111,7 @@ class EscalationClassifier:
             (r'(?i)\benemies?\s+must\s+be\s+(destroyed|eliminated)', "violence_advocacy"),
             (r'(?i)\bwake\s+up\s+sheeple', "conspiracy_language"),
             (r'(?i)\bopen\s+your\s+eyes', "recruitment_language"),
-            
+
             # Hate/harassment expressions
             (r'(?i)\bi\s+hate\s+(you|him|her|them|everyone)', "hate_expression"),
             (r'(?i)\byou\s+(suck|are\s+worthless|are\s+trash)', "harassment"),
@@ -127,16 +123,16 @@ class EscalationClassifier:
             (r'(?i)\bwish\s+(you|he|she|they)\s+(were\s+)?dead', "death_wish"),
             (r'(?i)\bkill\s+yourself', "self_harm_encouragement"),
         ]
-        
+
         # Compile patterns
         self._compiled_patterns = [
             (re.compile(pattern), category)
             for pattern, category in self.suspicious_patterns
         ]
-        
+
         # Load learned patterns from active learning
         self._load_learned_patterns()
-        
+
         # Safe patterns - definitely safe, don't escalate
         self.safe_patterns = [
             r'(?i)^(hi|hello|hey|thanks|thank you|please|okay|ok|yes|no|sure)[\s\.\!\?]*$',
@@ -148,18 +144,18 @@ class EscalationClassifier:
             r'(?i)\b(family|friend|vacation|birthday|weekend|holiday)\b',
         ]
         self._safe_patterns = [re.compile(p) for p in self.safe_patterns]
-    
+
     def _is_clearly_safe(self, text: str) -> bool:
         """Check if text is clearly safe."""
         for pattern in self._safe_patterns:
             if pattern.search(text):
                 return True
         return False
-    
+
     def classify(self, text: str) -> EscalationResult:
         """
         Classify if text needs escalation to Claude API.
-        
+
         Returns:
             EscalationResult with needs_escalation flag and details
         """
@@ -171,23 +167,23 @@ class EscalationClassifier:
                 confidence=0.95,
                 triggered_patterns=[]
             )
-        
+
         # Check for suspicious patterns
         triggered = []
         for pattern, category in self._compiled_patterns:
             if pattern.search(text):
                 triggered.append(category)
-        
+
         if triggered:
             confidence = min(0.6 + (len(triggered) * 0.1), 0.95)
-            
+
             return EscalationResult(
                 needs_escalation=True,
                 reason="suspicious_patterns_detected",
                 confidence=confidence,
                 triggered_patterns=list(set(triggered))
             )
-        
+
         # No triggers - but still might need review for very short/ambiguous text
         if len(text.split()) < 5:
             return EscalationResult(
@@ -196,7 +192,7 @@ class EscalationClassifier:
                 confidence=0.8,
                 triggered_patterns=[]
             )
-        
+
         return EscalationResult(
             needs_escalation=False,
             reason="no_suspicious_patterns",
@@ -211,7 +207,7 @@ class EscalationClassifier:
             from ..training.active_learner import ActiveLearner
             learner = ActiveLearner()
             learned = learner.get_learned_patterns()
-            
+
             if learned:
                 for pattern, name in learned:
                     try:
@@ -219,11 +215,11 @@ class EscalationClassifier:
                         self.suspicious_patterns.append((compiled, name))
                     except re.error as e:
                         logger.warning(f"Invalid learned pattern {name}: {e}")
-                
+
                 logger.info(f"Loaded {len(learned)} learned patterns")
         except Exception as e:
             logger.warning(f"Could not load learned patterns: {e}")
-    
+
     def reload_patterns(self):
         """Reload all patterns including learned ones."""
         # Re-initialize base patterns

@@ -3,18 +3,17 @@ Structured logging for audit trails and compliance.
 Logs in JSON format for easy parsing by log aggregators.
 """
 
-import os
 import json
 import logging
-import time
+import os
 from datetime import datetime
-from typing import Optional, Dict, Any
-from functools import wraps
+from typing import Any, Dict, Optional
+
 
 # Configure JSON formatter
 class JSONFormatter(logging.Formatter):
     """JSON log formatter for structured logging."""
-    
+
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -22,38 +21,38 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        
+
         # Add extra fields if present
         if hasattr(record, "extra_data"):
             log_data.update(record.extra_data)
-        
+
         # Add exception info if present
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
-        
+
         return json.dumps(log_data)
 
 
 class AuditLogger:
     """
     Audit logger for compliance tracking.
-    
+
     Logs:
     - All API requests (sanitized - no raw PII)
     - Detection results
     - Authentication events
     - Rate limit events
     """
-    
+
     def __init__(self, log_file: str = None):
         self.logger = logging.getLogger("audit")
         self.logger.setLevel(logging.INFO)
-        
+
         # Prevent duplicate handlers
         if not self.logger.handlers:
             # Console handler (JSON in production)
             console_handler = logging.StreamHandler()
-            
+
             if os.getenv("LOG_FORMAT", "text") == "json":
                 console_handler.setFormatter(JSONFormatter())
             else:
@@ -61,7 +60,7 @@ class AuditLogger:
                     logging.Formatter("%(asctime)s - AUDIT - %(message)s")
                 )
             self.logger.addHandler(console_handler)
-            
+
             # File handler (always JSON)
             if log_file or os.getenv("AUDIT_LOG_FILE"):
                 file_path = log_file or os.getenv("AUDIT_LOG_FILE", "data/audit.log")
@@ -69,13 +68,13 @@ class AuditLogger:
                 file_handler = logging.FileHandler(file_path)
                 file_handler.setFormatter(JSONFormatter())
                 self.logger.addHandler(file_handler)
-    
+
     def _log(self, event_type: str, data: Dict[str, Any]):
         """Internal log method."""
         record = self.logger.makeRecord(
             self.logger.name,
             logging.INFO,
-            "", 0, 
+            "", 0,
             f"{event_type}: {data.get('summary', '')}",
             None, None
         )
@@ -84,7 +83,7 @@ class AuditLogger:
             **data
         }
         self.logger.handle(record)
-    
+
     def log_request(
         self,
         request_id: str,
@@ -112,7 +111,7 @@ class AuditLogger:
             "detectors_used": detectors_used or [],
             "summary": f"action={action} categories={len(categories)} time={processing_time_ms:.0f}ms"
         })
-    
+
     def log_auth_success(self, tenant_id: str, client_ip: str = None):
         """Log successful authentication."""
         self._log("auth_success", {
@@ -120,7 +119,7 @@ class AuditLogger:
             "client_ip": self._mask_ip(client_ip) if client_ip else None,
             "summary": f"tenant={tenant_id}"
         })
-    
+
     def log_auth_failure(self, reason: str, client_ip: str = None):
         """Log failed authentication attempt."""
         self._log("auth_failure", {
@@ -128,7 +127,7 @@ class AuditLogger:
             "client_ip": self._mask_ip(client_ip) if client_ip else None,
             "summary": f"reason={reason}"
         })
-    
+
     def log_rate_limit(self, client_id: str, limit: int):
         """Log rate limit event."""
         self._log("rate_limit", {
@@ -136,7 +135,7 @@ class AuditLogger:
             "limit": limit,
             "summary": f"limit={limit}/min exceeded"
         })
-    
+
     def log_escalation(
         self,
         request_id: str,
@@ -152,7 +151,7 @@ class AuditLogger:
             "cost_usd": round(cost_usd, 6),
             "summary": f"patterns={triggered_patterns} result={claude_result}"
         })
-    
+
     def log_feedback(
         self,
         feedback_id: str,
@@ -168,7 +167,7 @@ class AuditLogger:
             "tenant_id": tenant_id,
             "summary": f"type={feedback_type}"
         })
-    
+
     def log_error(self, error_type: str, message: str, request_id: str = None):
         """Log error event."""
         self._log("error", {
@@ -177,7 +176,7 @@ class AuditLogger:
             "request_id": request_id,
             "summary": f"{error_type}: {message[:50]}"
         })
-    
+
     def _mask_ip(self, ip: str) -> str:
         """Mask IP address for privacy (keep first two octets)."""
         if not ip:

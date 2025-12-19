@@ -4,16 +4,14 @@ Prometheus metrics for Universal Restrictor.
 Exposes metrics at /metrics endpoint.
 """
 
-import time
-from functools import wraps
 from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
     Counter,
-    Histogram,
     Gauge,
+    Histogram,
     Info,
     generate_latest,
-    CONTENT_TYPE_LATEST,
-    REGISTRY
 )
 
 # =============================================================================

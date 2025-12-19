@@ -1,11 +1,12 @@
 """Feedback API routes with authentication."""
 
-from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from ..feedback.models import FeedbackRequest, FeedbackResponse
 from ..feedback.storage import get_feedback_storage
-from .middleware import get_api_key_auth, APIKeyAuth
+from .middleware import APIKeyAuth, get_api_key_auth
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -17,11 +18,11 @@ async def verify_api_key_optional(
     """Verify API key (optional for feedback)."""
     if x_api_key is None:
         return {"tenant_id": "anonymous", "tier": "free"}
-    
+
     tenant = auth.validate(x_api_key)
     if tenant is None:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
     return tenant
 
 
@@ -34,7 +35,7 @@ async def submit_feedback(
     Submit feedback for a previous analysis request.
     """
     storage = get_feedback_storage()
-    
+
     record = storage.store_feedback(
         request_id=request.request_id,
         feedback_type=request.feedback_type,
@@ -42,13 +43,13 @@ async def submit_feedback(
         comment=request.comment,
         tenant_id=tenant.get("tenant_id", "anonymous")
     )
-    
+
     if record is None:
         raise HTTPException(
             status_code=404,
             detail=f"Request ID '{request.request_id}' not found."
         )
-    
+
     return FeedbackResponse(
         feedback_id=record.feedback_id,
         status="recorded",

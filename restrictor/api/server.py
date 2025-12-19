@@ -3,25 +3,26 @@ Universal Restrictor API Server.
 Security-hardened: Required auth, restricted CORS, sanitized errors.
 """
 
-import os
 import logging
+import os
 import traceback
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Security
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, validator
+from starlette.responses import Response
 
 from ..engine import Restrictor
-from ..models import PolicyConfig
+from ..feedback.models import FeedbackType
 from ..feedback.storage import get_feedback_storage
-from ..feedback.models import FeedbackType, FeedbackRequest
-from .middleware import RateLimitMiddleware, require_api_key, MetricsMiddleware
-from .metrics import record_detection
+from ..models import PolicyConfig
 from .logging_config import get_audit_logger
+from .metrics import record_detection
+from .middleware import MetricsMiddleware, RateLimitMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -79,7 +80,7 @@ class AnalyzeRequest(BaseModel):
     pii_types: Optional[List[str]] = None
     toxicity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     pii_confidence_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
-    
+
     @validator('text')
     def text_not_empty(cls, v):
         if not v or not v.strip():
@@ -114,7 +115,7 @@ class FeedbackSubmitRequest(BaseModel):
     feedback_type: str
     corrected_category: Optional[str] = None
     comment: Optional[str] = Field(None, max_length=1000)
-    
+
     @validator('request_id')
     def validate_request_id(cls, v):
         import re
@@ -125,7 +126,7 @@ class FeedbackSubmitRequest(BaseModel):
         if not uuid_pattern.match(v):
             raise ValueError('Invalid request_id format')
         return v
-    
+
     @validator('feedback_type')
     def validate_feedback_type(cls, v):
         valid_types = ['correct', 'false_positive', 'false_negative', 'category_correction']
@@ -183,11 +184,11 @@ async def get_api_key(
                 "message": "API key required. Include X-API-Key header."
             }
         )
-    
+
     from .middleware import get_auth
     auth = get_auth()
     is_valid, tenant_info = auth.validate(api_key)
-    
+
     if not is_valid:
         raise HTTPException(
             status_code=403,
@@ -196,7 +197,7 @@ async def get_api_key(
                 "message": "Invalid API key."
             }
         )
-    
+
     return tenant_info
 
 
@@ -230,13 +231,13 @@ async def analyze_text(
         toxicity_threshold=request.toxicity_threshold,
         pii_confidence_threshold=request.pii_confidence_threshold,
     )
-    
+
     result = restrictor.analyze(request.text, policy=policy)
-    
+
     # Record Prometheus metrics
     for detection in result.detections:
         record_detection(detection.category.value, result.action.value)
-    
+
     # Cache for feedback
     try:
         storage = get_feedback_storage()
@@ -251,7 +252,7 @@ async def analyze_text(
         )
     except Exception as e:
         logger.warning(f"Failed to cache request: {e}")
-    
+
     # Build response with masked PII
     detections = []
     for d in result.detections:
@@ -264,7 +265,7 @@ async def analyze_text(
             explanation=d.explanation,
             detector=d.detector
         ))
-    
+
     # Audit log
     audit = get_audit_logger()
     audit.log_request(
@@ -278,7 +279,7 @@ async def analyze_text(
         processing_time_ms=result.processing_time_ms,
         detectors_used=list(set(d.detector for d in result.detections))
     )
-    
+
     return AnalyzeResponse(
         action=result.action.value,
         request_id=result.request_id,
@@ -305,7 +306,7 @@ async def analyze_batch(
             status_code=400,
             detail={"error": "batch_too_large", "message": "Maximum 100 texts per batch"}
         )
-    
+
     results = []
     for text in texts:
         if text and text.strip():
@@ -315,7 +316,7 @@ async def analyze_batch(
                 "request_id": result.request_id,
                 "detection_count": len(result.detections)
             })
-    
+
     return {"results": results, "count": len(results)}
 
 
@@ -326,7 +327,7 @@ async def submit_feedback(
 ):
     """Submit feedback on a detection. Requires valid API key."""
     storage = get_feedback_storage()
-    
+
     try:
         feedback_type = FeedbackType(request.feedback_type)
     except ValueError:
@@ -334,7 +335,7 @@ async def submit_feedback(
             status_code=400,
             detail={"error": "invalid_feedback_type", "message": "Invalid feedback type"}
         )
-    
+
     record = storage.store_feedback(
         request_id=request.request_id,
         feedback_type=feedback_type,
@@ -342,7 +343,7 @@ async def submit_feedback(
         comment=request.comment,
         tenant_id=tenant.get("tenant_id") if tenant else None
     )
-    
+
     if record:
         return {
             "feedback_id": record.feedback_id,
@@ -374,11 +375,11 @@ async def list_categories(tenant: dict = Depends(get_api_key)):
 async def get_usage(tenant: dict = Depends(get_api_key)):
     """Get API usage statistics including Claude API costs."""
     from restrictor.detectors.usage_tracker import get_usage_tracker
-    
+
     tracker = get_usage_tracker()
     if tracker.is_connected:
         return tracker.get_usage()
-    
+
     # Fallback to in-memory stats
     return restrictor.get_api_usage()
 
@@ -387,13 +388,13 @@ async def get_usage(tenant: dict = Depends(get_api_key)):
 async def list_feedback(tenant: dict = Depends(get_api_key)):
     """List all feedback for review. Requires valid API key."""
     storage = get_feedback_storage()
-    
+
     # Get feedback list from Redis
     if hasattr(storage, '_client') and storage.is_connected:
         try:
             feedback_ids = storage._client.smembers("feedback:all")
             feedback_list = []
-            
+
             for fid in feedback_ids:
                 fid = fid.decode() if isinstance(fid, bytes) else fid
                 data = storage._client.get(f"feedback:{fid}")
@@ -404,15 +405,15 @@ async def list_feedback(tenant: dict = Depends(get_api_key)):
                     if tenant.get("tenant_id") and record.get("tenant_id") != tenant.get("tenant_id"):
                         continue
                     feedback_list.append(record)
-            
+
             # Sort by timestamp descending
             feedback_list.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-            
+
             return {"feedback": feedback_list, "count": len(feedback_list)}
         except Exception as e:
             logger.error(f"Failed to list feedback: {e}")
             return {"feedback": [], "count": 0}
-    
+
     return {"feedback": [], "count": 0}
 
 
@@ -425,31 +426,31 @@ async def review_feedback(
     """Approve or reject feedback. Requires valid API key."""
     storage = get_feedback_storage()
     approved = review.get("approved", False)
-    
+
     if hasattr(storage, '_client') and storage.is_connected:
         try:
             import json
             key = f"feedback:{feedback_id}"
             data = storage._client.get(key)
-            
+
             if not data:
                 raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Feedback not found"})
-            
+
             record = json.loads(data)
             record["reviewed"] = True
             record["approved"] = approved
             record["reviewed_at"] = datetime.utcnow().isoformat()
             record["reviewed_by"] = tenant.get("tenant_id")
-            
+
             # If approved, mark for training
             if approved:
                 record["included_in_training"] = False  # Will be picked up by training job
-            
+
             storage._client.set(key, json.dumps(record))
-            
+
             # Update stats cache
             storage._client.delete("feedback:stats")
-            
+
             # Log audit
             audit = get_audit_logger()
             audit.log_feedback(
@@ -458,19 +459,19 @@ async def review_feedback(
                 feedback_type=f"reviewed_{('approved' if approved else 'rejected')}",
                 tenant_id=tenant.get("tenant_id")
             )
-            
+
             return {
                 "feedback_id": feedback_id,
                 "status": "approved" if approved else "rejected",
                 "message": "Feedback reviewed successfully"
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Failed to review feedback: {e}")
             raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
-    
+
     raise HTTPException(status_code=500, detail={"error": "storage_unavailable", "message": "Storage not available"})
 
 
@@ -479,10 +480,10 @@ async def run_training(tenant: dict = Depends(get_api_key)):
     """Run active learning training job. Requires valid API key."""
     try:
         from restrictor.training.active_learner import ActiveLearner
-        
+
         learner = ActiveLearner()
         result = learner.run_training()
-        
+
         return {
             "status": "completed",
             "feedback_processed": result.feedback_processed,
@@ -504,10 +505,10 @@ async def get_learned_patterns(tenant: dict = Depends(get_api_key)):
     """Get list of learned patterns from active learning."""
     try:
         from restrictor.training.active_learner import ActiveLearner
-        
+
         learner = ActiveLearner()
         data = learner.load_learned_patterns()
-        
+
         return {
             "patterns": data.get("patterns", []),
             "metadata": data.get("metadata", {}),
@@ -525,7 +526,7 @@ async def get_learned_patterns(tenant: dict = Depends(get_api_key)):
 # Prometheus Metrics Endpoint
 # =============================================================================
 
-from starlette.responses import Response
+
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
