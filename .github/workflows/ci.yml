@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-ci.txt
           pip install pytest pytest-cov httpx
       
       - name: Run tests
@@ -64,6 +64,7 @@ jobs:
           API_KEYS: "test-key-1234567890:test-tenant:free"
           REDIS_URL: "redis://localhost:6379/0"
           ANTHROPIC_API_KEY: ""
+          SKIP_LLAMA: "true"
         run: pytest tests/test_api.py -v
 
   security:
