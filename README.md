@@ -318,8 +318,8 @@ universal-restrictor/
 - [x] Active learning
 - [x] Kubernetes Helm chart
 - [ ] Hindi/Tamil/Telugu toxicity
-- [ ] Prometheus metrics
-- [ ] CI/CD pipeline
+- [x] Prometheus metrics
+- [x] CI/CD pipeline
 
 ## License
 
