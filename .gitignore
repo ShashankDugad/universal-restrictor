@@ -48,3 +48,6 @@ htmlcov/
 # Prometheus & Grafana data
 data/prometheus/
 data/grafana/
+
+# Training data (too large for git)
+data/datasets/*.jsonl
