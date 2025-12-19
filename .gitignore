@@ -51,3 +51,6 @@ data/grafana/
 
 # Training data (too large for git)
 data/datasets/*.jsonl
+
+# Custom trained model (too large for git)
+models/restrictor-model-final/

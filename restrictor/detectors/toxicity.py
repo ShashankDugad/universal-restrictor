@@ -14,6 +14,60 @@ from typing import List, Tuple
 
 from ..models import Category, Detection, Severity
 
+# Custom trained model (YOUR IP)
+CUSTOM_MODEL_PATH = os.path.join(os.path.dirname(__file__), "../../models/restrictor-model-final")
+_custom_classifier = None
+_custom_model_loaded = False
+
+def _get_custom_classifier():
+    """Load custom model once."""
+    global _custom_classifier, _custom_model_loaded
+    
+    if _custom_model_loaded:
+        return _custom_classifier
+    
+    if not os.path.exists(CUSTOM_MODEL_PATH):
+        logger.info("Custom model not found, will use Llama Guard only")
+        _custom_model_loaded = True
+        return None
+    
+    try:
+        from transformers import pipeline
+        logger.info(f"Loading custom toxicity model...")
+        _custom_classifier = pipeline(
+            "text-classification",
+            model=CUSTOM_MODEL_PATH,
+            device=-1  # CPU
+        )
+        logger.info("Custom toxicity model loaded (YOUR IP)")
+        _custom_model_loaded = True
+        return _custom_classifier
+    except Exception as e:
+        logger.warning(f"Custom model load failed: {e}, using Llama Guard")
+        _custom_model_loaded = True
+        return None
+
+def _detect_with_custom_model(text: str, threshold: float = 0.7):
+    """
+    Detect toxicity using custom trained model.
+    Returns: (is_toxic, confidence, category) or None if model not available
+    """
+    classifier = _get_custom_classifier()
+    if classifier is None:
+        return None
+    
+    try:
+        result = classifier(text[:512])[0]
+        label = result["label"]
+        score = result["score"]
+        
+        if label == "toxic" and score >= threshold:
+            return True, score, Category.TOXIC_HARASSMENT
+        return False, score, None
+    except Exception as e:
+        logger.error(f"Custom model error: {e}")
+        return None
+
 logger = logging.getLogger(__name__)
 
 LLAMA_GUARD_CATEGORIES = {
@@ -259,23 +313,46 @@ Provide your safety assessment for User in the above conversation:
         return detections
 
     def detect(self, text: str, threshold: float = 0.5) -> List[Detection]:
-        """Detect toxic content using hybrid approach."""
+        """Detect toxic content using hybrid approach.
+        
+        Priority:
+        1. Fast keyword detection (obvious threats)
+        2. Custom trained model (YOUR IP - best accuracy)
+        3. Llama Guard fallback (if custom model unavailable)
+        """
         all_detections = []
-
-        # Fast keyword detection first
+        
+        # 1. Fast keyword detection first
         keyword_detections = self._keyword_detect(text)
         all_detections.extend(keyword_detections)
-
-        # If keywords found critical threats, skip LLM
+        
+        # If keywords found critical threats, skip other models
         has_critical = any(d.severity == Severity.CRITICAL for d in keyword_detections)
-
-        # Skip LLM for finance/PII text (handled by other detectors)
+        
+        # Skip models for finance/PII text (handled by other detectors)
         should_skip = self._should_skip_llm(text)
-
+        
         if not has_critical and not should_skip:
-            llm_detections = self._llm_detect(text)
-            all_detections.extend(llm_detections)
-
+            # 2. Try custom trained model first (YOUR IP)
+            custom_result = _detect_with_custom_model(text, threshold)
+            
+            if custom_result is not None:
+                is_toxic, confidence, category = custom_result
+                if is_toxic:
+                    all_detections.append(Detection(
+                        category=category,
+                        confidence=confidence,
+                        severity=Severity.HIGH,
+                        matched_text=text[:100],
+                        start_pos=0,
+                        end_pos=len(text),
+                        explanation="Detected by custom trained model", detector="custom_model"
+                    ))
+            else:
+                # 3. Fallback to Llama Guard if custom model unavailable
+                llm_detections = self._llm_detect(text)
+                all_detections.extend(llm_detections)
+        
         # Deduplicate by category
         seen_categories = set()
         unique_detections = []
@@ -283,5 +360,4 @@ Provide your safety assessment for User in the above conversation:
             if d.category not in seen_categories:
                 seen_categories.add(d.category)
                 unique_detections.append(d)
-
         return unique_detections
