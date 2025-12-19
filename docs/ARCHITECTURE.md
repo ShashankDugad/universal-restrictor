@@ -268,3 +268,29 @@ Layer 4: Detection (Prompt injection, sanitization)
 Layer 5: Output (PII masking, error sanitization)
 Layer 6: Audit (Structured logging)
 ```
+
+## CI/CD Pipeline
+
+GitHub Actions workflow runs on every push:
+```
+┌─────────┐     ┌─────────┐     ┌──────────┐     ┌─────────────┐
+│  Lint   │────▶│  Test   │────▶│ Security │────▶│ Build Docker│
+│ (ruff)  │     │(pytest) │     │ (bandit) │     │             │
+└─────────┘     └─────────┘     └──────────┘     └─────────────┘
+```
+
+### Jobs
+
+| Job | Duration | Description |
+|-----|----------|-------------|
+| Lint | ~15s | ruff + black check |
+| Test | ~40s | pytest with Redis |
+| Security | ~15s | bandit scan |
+| Build | ~5m | Docker image |
+
+### Running Locally
+```bash
+make test       # Run tests
+make lint       # Run linters
+make check      # Both
+```
