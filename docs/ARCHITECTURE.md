@@ -269,6 +269,40 @@ Layer 5: Output (PII masking, error sanitization)
 Layer 6: Audit (Structured logging)
 ```
 
+
+## Custom Toxicity Model (IP)
+
+### Architecture
+```
+Input → Keywords (fast) → Custom DistilBERT → Claude API (premium)
+```
+
+### Model Details
+| Property | Value |
+|----------|-------|
+| Base | DistilBERT |
+| Training Data | 27K examples |
+| F1 Score | 83.6% |
+| Precision | 80.9% |
+| Recall | 86.7% |
+| Size | 267MB |
+| Inference | ~100ms CPU |
+
+### Training
+```bash
+# Generate training data
+python data/datasets/download.py
+python data/datasets/prepare_training.py
+
+# Train in Google Colab
+# Upload train_unified.jsonl + train_colab.ipynb
+```
+
+### Files
+- `models/restrictor-model-final/` - Trained model weights (NOT in git)
+- `data/datasets/*.py` - Data preparation scripts
+- `data/training/train_colab.ipynb` - Training notebook
+
 ## CI/CD Pipeline
 
 GitHub Actions workflow runs on every push:

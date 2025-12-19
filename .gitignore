@@ -54,3 +54,8 @@ data/datasets/*.jsonl
 
 # Custom trained model (too large for git)
 models/restrictor-model-final/
+
+# Training artifacts
+data/training/*.zip
+data/training/*.pt
+data/training/*.bin

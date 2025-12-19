@@ -306,7 +306,7 @@ universal-restrictor/
 ## Roadmap
 
 - [x] PII detection (India-specific)
-- [x] Toxicity detection (hybrid)
+- [x] Toxicity detection (custom trained model - YOUR IP)
 - [x] Finance intent detection
 - [x] Prompt injection detection
 - [x] Claude API premium tier
