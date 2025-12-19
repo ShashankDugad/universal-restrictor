@@ -1,5 +1,7 @@
 # Universal Restrictor
 
+![CI](https://github.com/ShashankDugad/universal-restrictor/actions/workflows/ci.yml/badge.svg)
+
 **Model-agnostic content classification API for LLM safety.**
 
 Production-ready detection for PII, toxicity, prompt injection, and finance compliance — designed for Indian financial services with on-premise deployment support.
@@ -61,6 +63,20 @@ Web-based admin interface with:
 | **Training** | Run active learning, view learned patterns |
 
 **Access:** http://localhost:3000/standalone.html
+
+
+## Makefile Commands
+```bash
+make help          # Show all commands
+make setup         # Full setup (venv + install)
+make run           # Start API server
+make dashboard     # Start admin dashboard
+make test          # Run tests
+make dev           # Start Redis + API (development)
+make dev-full      # Start full stack (Redis + Monitoring + API)
+make monitoring-up # Start Prometheus + Grafana
+make urls          # Show all service URLs
+```
 
 ## Configuration
 
