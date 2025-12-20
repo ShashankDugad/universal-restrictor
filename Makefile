@@ -77,7 +77,7 @@ env: ## Create .env file from example
 
 run: ## Run the API server
 	@echo "$(BLUE)Starting API server on port $(PORT)...$(NC)"
-	uvicorn restrictor.api.server:app --host 0.0.0.0 --port $(PORT) --reload
+	./run.sh
 
 run-prod: ## Run in production mode (no reload)
 	@echo "$(BLUE)Starting API server in production mode...$(NC)"
