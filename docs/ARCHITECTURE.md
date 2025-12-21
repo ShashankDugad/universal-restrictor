@@ -328,3 +328,31 @@ make test       # Run tests
 make lint       # Run linters
 make check      # Both
 ```
+
+## Reliability Patterns
+
+### Circuit Breaker (Claude API)
+```
+CLOSED (normal) → 5 failures → OPEN (reject) → 30s → HALF_OPEN (test) → success → CLOSED
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Failure Threshold | 5 |
+| Recovery Timeout | 30s |
+| Half-Open Max Calls | 3 |
+
+### Retry with Exponential Backoff
+```
+Attempt 1 → fail → wait 1s → Attempt 2 → fail → wait 2s → Attempt 3 → fail → error
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Max Retries | 3 |
+| Base Delay | 1s |
+| Max Delay | 60s |
+| Jitter | Yes |
+
+### PodDisruptionBudget
+Ensures at least 1 pod is always available during node maintenance.

@@ -25,6 +25,8 @@ try:
 except ImportError:
     METRICS_AVAILABLE = False
 from .input_sanitizer import get_sanitizer
+from ..utils.circuit_breaker import claude_circuit_breaker, CircuitBreakerOpen
+from ..utils.retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -201,12 +203,13 @@ class ClaudeDetector:
 
         prompt = self._build_prompt(sanitized.sanitized, context)
 
+        # Check circuit breaker
+        if not claude_circuit_breaker.can_execute():
+            logger.warning("Claude API circuit breaker is OPEN - skipping")
+            return []
+        
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.rate_limit.max_tokens_per_request,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            response = self._call_claude_api(prompt)
 
             # Record usage
             self._record_usage(
@@ -215,11 +218,24 @@ class ClaudeDetector:
             )
 
             result = response.content[0].text.strip()
+            claude_circuit_breaker.record_success()
             return self._parse_response(result, text)
-
+        except CircuitBreakerOpen:
+            logger.warning("Claude API circuit breaker is OPEN")
+            return []
         except Exception as e:
+            claude_circuit_breaker.record_failure()
             logger.error(f"Claude API error: {e}")
             return []
+    
+    @retry_with_backoff(max_retries=3, base_delay=1.0, exceptions=(Exception,))
+    def _call_claude_api(self, prompt: str):
+        """Call Claude API with retry."""
+        return self.client.messages.create(
+            model=self.model,
+            max_tokens=self.rate_limit.max_tokens_per_request,
+            messages=[{"role": "user", "content": prompt}]
+        )
 
     def _build_prompt(self, text: str, context: str = None) -> str:
         """Build the analysis prompt."""
