@@ -1,108 +1,27 @@
 """
-Toxicity Detector - Hybrid approach: Keywords + Llama Guard 3.
+Toxicity Detector - Unified detection pipeline.
 
-Strategy:
-1. Fast keyword check for obvious threats (high confidence)
-2. Llama Guard for nuanced/borderline cases
-3. Skip LLM for finance/PII text (handled by other detectors)
+Pipeline order:
+1. Keywords (instant, high-confidence patterns)
+2. MoE Model (2-stage MuRIL)
+3. Claude API (edge cases, low confidence)
 """
-
-import logging
-import os
 import re
-from typing import List, Tuple
+import logging
+from typing import List, Optional, Tuple
+from enum import Enum
 
-from ..models import Category, Detection, Severity
-
-# Custom trained model (YOUR IP)
-CUSTOM_MODEL_PATH = os.path.join(os.path.dirname(__file__), "../../models/restrictor-model-final")
-_custom_classifier = None
-_custom_model_loaded = False
-
-def _get_custom_classifier():
-    """Load custom model once."""
-    global _custom_classifier, _custom_model_loaded
-    
-    if _custom_model_loaded:
-        return _custom_classifier
-    
-    if not os.path.exists(CUSTOM_MODEL_PATH):
-        logger.info("Custom model not found, will use Llama Guard only")
-        _custom_model_loaded = True
-        return None
-    
-    try:
-        from transformers import pipeline
-        logger.info(f"Loading custom toxicity model...")
-        _custom_classifier = pipeline(
-            "text-classification",
-            model=CUSTOM_MODEL_PATH,
-            device=-1  # CPU
-        )
-        logger.info("Custom toxicity model loaded (YOUR IP)")
-        _custom_model_loaded = True
-        return _custom_classifier
-    except Exception as e:
-        logger.warning(f"Custom model load failed: {e}, using Llama Guard")
-        _custom_model_loaded = True
-        return None
-
-def _detect_with_custom_model(text: str, threshold: float = 0.7):
-    """
-    Detect toxicity using custom trained model.
-    Returns: (is_toxic, confidence, category) or None if model not available
-    """
-    classifier = _get_custom_classifier()
-    if classifier is None:
-        return None
-    
-    try:
-        result = classifier(text[:512])[0]
-        label = result["label"]
-        score = result["score"]
-        
-        if label == "toxic" and score >= threshold:
-            return True, score, Category.TOXIC_HARASSMENT
-        return False, score, None
-    except Exception as e:
-        logger.error(f"Custom model error: {e}")
-        return None
+from restrictor.models import Detection, Category, Severity
 
 logger = logging.getLogger(__name__)
 
-LLAMA_GUARD_CATEGORIES = {
-    "S1": ("violent_crimes", Category.TOXIC_VIOLENCE, Severity.CRITICAL),
-    "S2": ("non_violent_crimes", Category.TOXIC_HARASSMENT, Severity.HIGH),
-    "S3": ("sex_related_crimes", Category.TOXIC_SEXUAL, Severity.CRITICAL),
-    "S4": ("hate", Category.TOXIC_HATE, Severity.CRITICAL),
-    "S5": ("defamation", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
-    "S6": ("specialized_advice", Category.TOXIC_HARASSMENT, Severity.LOW),
-    # S7 = privacy - we handle PII separately, skip this
-    "S8": ("intellectual_property", Category.TOXIC_HARASSMENT, Severity.LOW),
-    "S9": ("indiscriminate_weapons", Category.TOXIC_VIOLENCE, Severity.CRITICAL),
-    "S10": ("hate", Category.TOXIC_HATE, Severity.CRITICAL),
-    "S11": ("suicide_self_harm", Category.TOXIC_SELF_HARM, Severity.CRITICAL),
-    "S12": ("sexual_content", Category.TOXIC_SEXUAL, Severity.HIGH),
-    "S13": ("elections", Category.TOXIC_HARASSMENT, Severity.MEDIUM),
-}
 
-# Skip LLM for these patterns (handled by other detectors)
-SKIP_LLM_PATTERNS = [
-    # Finance
-    r'(?i)\b(buy|sell|target|nifty|sensex|reliance|tcs|hdfcbank|infy|stock|share|trading|bullish|bearish)\b',
-    r'(?i)\b(loan|emi|interest|credit|account|bank|upi|ifsc|demat|gst)\b',
-    r'(?i)\b(guaranteed|assured|returns|invest|profit|double.*money)\b',
-    # PII indicators
-    r'(?i)\b(email|phone|aadhaar|pan|password|api.?key|ssn|credit.?card)\b',
-    r'@[a-zA-Z]+\.(com|org|net|in)',  # Email domains
-    r'@(okaxis|ybl|paytm|okhdfcbank)',  # UPI
-    r'\b[A-Z]{4}0[A-Z0-9]{6}\b',  # IFSC
-    r'\b\d{12}\b',  # Aadhaar-like
-]
+# =============================================================================
+# KEYWORD PATTERNS (Fast, high-confidence)
+# =============================================================================
 
-# High-confidence threat patterns
 THREAT_PATTERNS: List[Tuple[str, Category, Severity, str]] = [
-    # Direct violence threats
+    # === DIRECT VIOLENCE ===
     (r'(?i)\b(i\s+will\s+kill\s+you|i\'?m\s+going\s+to\s+kill\s+you|gonna\s+kill\s+you)',
      Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Direct death threat"),
     (r'(?i)\b(i\s+will\s+murder|i\'?m\s+going\s+to\s+murder|gonna\s+murder)',
@@ -111,253 +30,339 @@ THREAT_PATTERNS: List[Tuple[str, Category, Severity, str]] = [
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Encouraging self-harm"),
     (r'(?i)\b(i\s+will\s+shoot|i\'?m\s+going\s+to\s+shoot|gonna\s+shoot)\s*(you|him|her|them)?',
      Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Shooting threat"),
-    (r'(?i)\b(i\s+will\s+stab|i\'?m\s+going\s+to\s+stab|gonna\s+stab)',
-     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Stabbing threat"),
-    (r'(?i)\b(i\s+will\s+hurt|i\'?m\s+going\s+to\s+hurt|gonna\s+hurt)\s*(you|him|her|them)',
-     Category.TOXIC_VIOLENCE, Severity.HIGH, "Threat of physical harm"),
-    (r'(?i)\b(beat\s+(you|them)\s+up|kick\s+your\s+ass|smash\s+your\s+face)',
-     Category.TOXIC_VIOLENCE, Severity.HIGH, "Physical violence threat"),
-    (r'(?i)\b(i\'?ll\s+smash|gonna\s+smash)\s+(your|his|her)',
-     Category.TOXIC_VIOLENCE, Severity.HIGH, "Physical violence threat"),
-    (r'(?i)\b(destroy\s+your\s+family|kill\s+your.*family)',
-     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Family threat"),
-    (r'(?i)\bgonna\s+kill\s+(your|his|her)',
-     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Death threat"),
-
-    # Hate speech
-    (r'(?i)\b(hate\s+all|eliminate\s+all|exterminate\s+all|kill\s+all)\s+\w+',
+    
+    # === HINDI/HINGLISH SLURS ===
+    (r'(?i)\b(madarchod|madarc?hod|mc\b|m\.c\.|motherchod)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - maternal"),
+    (r'(?i)\b(bhenchod|behen\s*chod|bc\b|b\.c\.|sister.*chod|benchod)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - sister"),
+    (r'(?i)\b(chutiya|chutiy[ae]|ch[uoo]t)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - vulgar"),
+    (r'(?i)\b(gandu|gaand|g[a@]ndu)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - vulgar"),
+    (r'(?i)\b(randi|r[a@]ndi|randwa)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - prostitute"),
+    (r'(?i)\b(harami|haramkhor|haram\s*zada)',
+     Category.TOXIC_HARASSMENT, Severity.HIGH, "Hindi slur - illegitimate"),
+    (r'(?i)\b(kutt[ae]|kutta|kuttiya|kutiya)',
+     Category.TOXIC_HARASSMENT, Severity.HIGH, "Hindi slur - dog"),
+    (r'(?i)\b(bhosdi\s*ke|bhosd[i]?k[e]?|bsdk)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - vulgar"),
+    (r'(?i)\b(lodu|loda|lauda|l[o0]de)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - vulgar"),
+    (r'(?i)\bteri\s*maa\s*ki',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - maternal"),
+    (r'(?i)\bteri\s*behen',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi slur - sister"),
+    (r'(?i)\b(saala|saale|sala\b|kamina|kameena)',
+     Category.TOXIC_HARASSMENT, Severity.MEDIUM, "Hindi slur"),
+    (r'(?i)\b(tmkc|bkl|mkc)',
+     Category.TOXIC_HARASSMENT, Severity.CRITICAL, "Hindi abbreviation slur"),
+    
+    # === DANGEROUS CONTENT ===
+    (r'(?i)(how\s+to\s+make.*bomb|build.*bomb|homemade\s+explosive)',
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Bomb-making"),
+    (r'(?i)(how\s+to\s+make.*explosive|explosive\s+device|ied\b)',
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Explosive device"),
+    (r'(?i)(how\s+to\s+make.*poison|make.*ricin|make.*cyanide)',
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Poison-making"),
+    (r'(?i)(how\s+to\s+make.*gun|3d.*print.*gun|ghost\s+gun)',
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Weapon manufacturing"),
+    (r'(?i)(how\s+to\s+make.*meth|cook.*meth|synthesis.*drug)',
+     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Drug manufacturing"),
+    (r'(?i)(how\s+to\s+hack|ddos\s+attack|sql\s+injection)',
+     Category.TOXIC_HARASSMENT, Severity.HIGH, "Hacking instructions"),
+    
+    # === HATE SPEECH ===
+    (r'(?i)\b(hate\s+all|kill\s+all|exterminate\s+all)\s+\w+',
      Category.TOXIC_HATE, Severity.CRITICAL, "Group hatred/genocide"),
-    (r'(?i)\b(should\s+(all\s+)?be\s+eliminated|should\s+all\s+die|deserve\s+to\s+die)',
-     Category.TOXIC_HATE, Severity.CRITICAL, "Dehumanizing speech"),
-    (r'(?i)\b(they\s+should.*eliminated|all.*eliminated)',
-     Category.TOXIC_HATE, Severity.CRITICAL, "Elimination rhetoric"),
     (r'(?i)\b(subhuman|inferior\s+race|master\s+race)',
      Category.TOXIC_HATE, Severity.CRITICAL, "Racial supremacy"),
-    (r'(?i)\b(you\s+subhuman)',
-     Category.TOXIC_HATE, Severity.CRITICAL, "Dehumanizing slur"),
-    (r'(?i)\bexterminate\s+(all|them)',
-     Category.TOXIC_HATE, Severity.CRITICAL, "Genocide language"),
-
-    # Self-harm
-    (r'(?i)\b(want\s+to\s+die|want\s+to\s+kill\s+myself|end\s+my\s+life)',
+    
+    # === SELF-HARM ===
+    (r'(?i)\b(want\s+to\s+kill\s+myself|end\s+my\s+life|commit\s+suicide)',
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Suicidal ideation"),
-    (r'(?i)\b(how\s+to\s+commit\s+suicide|best\s+way\s+to\s+(die|suicide)|painless\s+death)',
+    (r'(?i)\b(best\s+way\s+to\s+(die|suicide)|painless\s+death)',
      Category.TOXIC_SELF_HARM, Severity.CRITICAL, "Seeking suicide methods"),
-
-    # Weapons
-    (r'(?i)\b(how\s+to\s+make\s+a?\s*bomb|build\s+a?\s*bomb|homemade\s+explosive)',
-     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Bomb-making"),
-    (r'(?i)\b(how\s+to\s+make\s+poison|make\s+deadly\s+poison)',
-     Category.TOXIC_VIOLENCE, Severity.CRITICAL, "Poison-making"),
-
-    # Sexual
-    (r'(?i)\b(child\s+porn|cp\b|underage\s+sex|sex\s+with\s+minor)',
-     Category.TOXIC_SEXUAL, Severity.CRITICAL, "Child exploitation"),
 ]
 
-_model_instance = None
 
 
-def get_llm():
-    global _model_instance
+# =============================================================================
+# HINDI SAFE PHRASES (to prevent false positives)
+# =============================================================================
 
-    if _model_instance is not None:
-        return _model_instance
+HINDI_SAFE_PHRASES = [
+    "namaste", "namaskar", "kaise ho", "kaise hain", "kya haal", "kya hal",
+    "theek hai", "thik hai", "shukriya", "dhanyavaad", "dhanyavad", 
+    "alvida", "phir milenge", "kal milte", "accha", "acha",
+    "bahut accha", "bohot badiya", "mast", "sahi hai", "badhiya",
+    "shubh prabhat", "shubh ratri", "good morning", "good night",
+]
 
-    model_paths = [
-        os.path.join(os.path.dirname(__file__), "..", "..", "models", "Llama-Guard-3-8B.Q8_0.gguf"),
-        os.path.join(os.path.dirname(__file__), "..", "..", "models", "Llama-Guard-3-8B.Q4_K_M.gguf"),
-    ]
+HINDI_SLURS = [
+    "chod", "maa ki", "behen", "gandu", "kutt", "bhosdi", "lodu", 
+    "randi", "harami", "sala", "kamina", "chut", "lund", "gaand",
+]
 
-    model_path = None
-    for path in model_paths:
-        if os.path.exists(path):
-            model_path = path
-            break
+def is_safe_hindi(text: str) -> bool:
+    """Check if text is a safe Hindi phrase (not combined with slurs)."""
+    text_lower = text.lower().strip()
+    
+    # Check if any safe phrase is present
+    has_safe = any(phrase in text_lower for phrase in HINDI_SAFE_PHRASES)
+    if not has_safe:
+        return False
+    
+    # Check if any slur is also present
+    has_slur = any(slur in text_lower for slur in HINDI_SLURS)
+    
+    # Safe only if safe phrase present AND no slurs
+    return has_safe and not has_slur
 
-    if model_path is None:
-        logger.warning("No Llama Guard model found")
-        return None
 
-    try:
-        from llama_cpp import Llama
 
-        logger.info(f"Loading Llama Guard 3 from {model_path}")
-        _model_instance = Llama(
-            model_path=model_path,
-            n_ctx=2048,
-            n_threads=4,
-            n_gpu_layers=-1,
-            verbose=False,
-            seed=42,
-        )
-        logger.info("Llama Guard 3 loaded")
-        return _model_instance
+# =============================================================================
+# HINDI SAFE PHRASES (to prevent false positives)
+# =============================================================================
 
-    except Exception as e:
-        logger.error(f"Failed to load model: {e}")
-        return None
+HINDI_SAFE_PHRASES = [
+    "namaste", "namaskar", "kaise ho", "kaise hain", "kya haal", "kya hal",
+    "theek hai", "thik hai", "shukriya", "dhanyavaad", "dhanyavad", 
+    "alvida", "phir milenge", "kal milte", "accha", "acha",
+    "bahut accha", "bohot badiya", "mast", "sahi hai", "badhiya",
+    "shubh prabhat", "shubh ratri", "good morning", "good night",
+]
+
+HINDI_SLURS = [
+    "chod", "maa ki", "behen", "gandu", "kutt", "bhosdi", "lodu", 
+    "randi", "harami", "sala", "kamina", "chut", "lund", "gaand",
+]
+
+def is_safe_hindi(text: str) -> bool:
+    """Check if text is a safe Hindi phrase (not combined with slurs)."""
+    text_lower = text.lower().strip()
+    
+    # Check if any safe phrase is present
+    has_safe = any(phrase in text_lower for phrase in HINDI_SAFE_PHRASES)
+    if not has_safe:
+        return False
+    
+    # Check if any slur is also present
+    has_slur = any(slur in text_lower for slur in HINDI_SLURS)
+    
+    # Safe only if safe phrase present AND no slurs
+    return has_safe and not has_slur
 
 
 class ToxicityDetector:
-    """Hybrid toxicity detection: Keywords + Llama Guard."""
-
-    def __init__(self):
-        self.name = "toxicity_hybrid"
-        self._skip_patterns = [re.compile(p) for p in SKIP_LLM_PATTERNS]
-        self._threat_patterns = [
-            (re.compile(pattern), category, severity, explanation)
-            for pattern, category, severity, explanation in THREAT_PATTERNS
-        ]
-
-    def _should_skip_llm(self, text: str) -> bool:
-        """Check if text should skip LLM (handled by other detectors)."""
-        for pattern in self._skip_patterns:
-            if pattern.search(text):
-                return True
-        return False
-
+    """
+    Unified toxicity detection using Keywords + MoE + Claude.
+    """
+    
+    def __init__(
+        self,
+        use_moe: bool = True,
+        use_claude: bool = True,
+        moe_threshold: float = 0.7,
+        claude_threshold: float = 0.5,
+    ):
+        self.use_moe = use_moe
+        self.use_claude = use_claude
+        self.moe_threshold = moe_threshold
+        self.claude_threshold = claude_threshold
+        
+        self._moe_detector = None
+        self._claude_detector = None
+    
+    def _get_moe_detector(self):
+        """Lazy load MoE detector."""
+        if self._moe_detector is None and self.use_moe:
+            try:
+                from restrictor.detectors.moe_detector import get_moe_detector
+                self._moe_detector = get_moe_detector()
+                self._moe_detector.load()
+            except Exception as e:
+                logger.warning(f"Failed to load MoE detector: {e}")
+                self._moe_detector = None
+        return self._moe_detector
+    
+    def _get_claude_detector(self):
+        """Lazy load Claude detector."""
+        if self._claude_detector is None and self.use_claude:
+            try:
+                from restrictor.detectors.claude_detector import ClaudeDetector
+                self._claude_detector = ClaudeDetector()
+            except Exception as e:
+                logger.warning(f"Failed to load Claude detector: {e}")
+                self._claude_detector = None
+        return self._claude_detector
+    
     def _keyword_detect(self, text: str) -> List[Detection]:
-        """Fast keyword-based detection for obvious threats."""
+        """Fast keyword-based detection."""
         detections = []
-
-        for pattern, category, severity, explanation in self._threat_patterns:
-            match = pattern.search(text)
-            if match:
+        text_lower = text.lower()
+        
+        for pattern, category, severity, explanation in THREAT_PATTERNS:
+            if re.search(pattern, text):
                 detections.append(Detection(
                     category=category,
-                    severity=severity,
                     confidence=0.98,
-                    matched_text=match.group(0),
-                    start_pos=match.start(),
-                    end_pos=match.end(),
-                    explanation=explanation,
-                    detector="toxicity_keyword"
+                    severity=severity,
+                    detector="keyword",
+                    explanation=f"[KEYWORD] {explanation}",
+                    start_pos=0,
+                    end_pos=len(text),
+                    matched_text=text[:100],
                 ))
-
-        return detections
-
-    def _llm_detect(self, text: str) -> List[Detection]:
-        """LLM-based detection for nuanced cases."""
-        llm = get_llm()
-
-        if llm is None:
-            return []
-
-        prompt = f'''<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-
-Task: Check if there is unsafe content in 'User' messages in conversations according to our safety policy.
-
-<BEGIN CONVERSATION>
-
-User: {text}
-
-<END CONVERSATION>
-
-Provide your safety assessment for User in the above conversation:
-- First line must read 'safe' or 'unsafe'.
-- If unsafe, a second line must include a comma-separated list of violated categories.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-'''
-
-        try:
-            output = llm(
-                prompt,
-                max_tokens=50,
-                stop=['<|eot_id|>'],
-                temperature=0.0,
-            )
-            result = output['choices'][0]['text'].strip()
-            return self._parse_llm_result(result, text)
-
-        except Exception as e:
-            logger.error(f"LLM inference error: {e}")
-            return []
-
-    def _parse_llm_result(self, result: str, text: str) -> List[Detection]:
-        """Parse Llama Guard output."""
-        detections = []
-        lines = result.strip().split('\n')
-
-        if not lines or lines[0].lower().startswith('safe'):
-            return []
-
-        if lines[0].lower().startswith('unsafe'):
-            categories = []
-            for line in lines:
-                for word in line.replace(',', ' ').split():
-                    word = word.strip().upper()
-                    if word.startswith('S') and len(word) <= 3 and word[1:].isdigit():
-                        # Skip S7 (privacy) - we handle PII separately
-                        if word != "S7":
-                            categories.append(word)
-
-            if not categories:
-                return []  # Only S7 was detected, skip
-
-            for cat in categories:
-                if cat in LLAMA_GUARD_CATEGORIES:
-                    cat_name, our_category, severity = LLAMA_GUARD_CATEGORIES[cat]
-
-                    detections.append(Detection(
-                        category=our_category,
-                        severity=severity,
-                        confidence=0.90,
-                        matched_text=text[:100] + "..." if len(text) > 100 else text,
-                        start_pos=0,
-                        end_pos=len(text),
-                        explanation=f"Unsafe content: {cat_name}",
-                        detector="toxicity_llama_guard"
-                    ))
-
-        return detections
-
-    def detect(self, text: str, threshold: float = 0.5) -> List[Detection]:
-        """Detect toxic content using hybrid approach.
+                # Return first match for keywords (they're high confidence)
+                return detections
         
-        Priority:
-        1. Fast keyword detection (obvious threats)
-        2. Custom trained model (YOUR IP - best accuracy)
-        3. Llama Guard fallback (if custom model unavailable)
+        return detections
+    
+    def _moe_detect(self, text: str) -> List[Detection]:
+        """MoE model detection."""
+        moe = self._get_moe_detector()
+        if moe is None:
+            return []
+        
+        try:
+            detections = moe.detect(text)
+            # Add [MOE] prefix to explanation
+            for d in detections:
+                d.explanation = f"[MOE] {d.explanation}"
+            return detections
+        except Exception as e:
+            logger.error(f"MoE detection error: {e}")
+            return []
+    
+    def _claude_detect(self, text: str) -> List[Detection]:
+        """Claude API detection for edge cases."""
+        claude = self._get_claude_detector()
+        if claude is None:
+            return []
+        
+        try:
+            detections = claude.detect(text)
+            # Add [CLAUDE] prefix to explanation
+            for d in detections:
+                d.explanation = f"[CLAUDE] {d.explanation}"
+            return detections
+        except Exception as e:
+            logger.error(f"Claude detection error: {e}")
+            return []
+    
+    def detect(self, text: str, threshold: float = None) -> List[Detection]:
         """
+        Run full detection pipeline.
+        
+        Order:
+        0. Safe phrases check (prevent false positives)
+        1. Keywords (instant) - if match, return immediately
+        2. MoE (fast) - if high confidence, return
+        3. Claude (slow) - for uncertain cases
+        """
+        if not text or not text.strip():
+            return []
+        
+        # 0. Check for safe Hindi phrases first (prevent false positives)
+        if is_safe_hindi(text):
+            logger.info(f"✅ SAFE HINDI: '{text[:30]}...' - skipping detection")
+            return []
+        
         all_detections = []
         
-        # 1. Fast keyword detection first
+        # 1. Keyword detection (instant)
         keyword_detections = self._keyword_detect(text)
-        all_detections.extend(keyword_detections)
+        if keyword_detections:
+            logger.info(f"🔑 KEYWORD MATCH: {keyword_detections[0].explanation}")
+            return keyword_detections
         
-        # If keywords found critical threats, skip other models
-        has_critical = any(d.severity == Severity.CRITICAL for d in keyword_detections)
+        # 2. MoE detection
+        if self.use_moe:
+            moe_detections = self._moe_detect(text)
+            if moe_detections:
+                max_conf = max(d.confidence for d in moe_detections)
+                if max_conf >= self.moe_threshold:
+                    logger.info(f"🤖 MOE DETECTED: {moe_detections[0].detector} (conf: {max_conf:.2f})")
+                    return moe_detections
+                else:
+                    # Low confidence, add to all but continue to Claude
+                    logger.info(f"🤖 MOE LOW CONF: {moe_detections[0].detector} (conf: {max_conf:.2f}) - trying Claude")
+                    all_detections.extend(moe_detections)
         
-        # Skip models for finance/PII text (handled by other detectors)
-        should_skip = self._should_skip_llm(text)
-        
-        if not has_critical and not should_skip:
-            # 2. Try custom trained model first (YOUR IP)
-            custom_result = _detect_with_custom_model(text, threshold)
-            
-            if custom_result is not None:
-                is_toxic, confidence, category = custom_result
-                if is_toxic:
-                    all_detections.append(Detection(
-                        category=category,
-                        confidence=confidence,
-                        severity=Severity.HIGH,
-                        matched_text=text[:100],
-                        start_pos=0,
-                        end_pos=len(text),
-                        explanation="Detected by custom trained model", detector="custom_model"
-                    ))
+        # 3. Claude for edge cases (only if MoE uncertain or no detection)
+        if self.use_claude and not all_detections:
+            claude_detections = self._claude_detect(text)
+            if claude_detections:
+                logger.info(f"🧠 CLAUDE DETECTED: {claude_detections[0].category}")
+                return claude_detections
             else:
-                # 3. Fallback to Llama Guard if custom model unavailable
-                llm_detections = self._llm_detect(text)
-                all_detections.extend(llm_detections)
+                logger.info(f"✅ SAFE: No threats detected by any layer")
         
-        # Deduplicate by category
-        seen_categories = set()
-        unique_detections = []
-        for d in sorted(all_detections, key=lambda x: x.confidence, reverse=True):
-            if d.category not in seen_categories:
-                seen_categories.add(d.category)
-                unique_detections.append(d)
-        return unique_detections
+        return all_detections
+    
+    def detect_with_source(self, text: str) -> Tuple[List[Detection], str]:
+        """
+        Run detection and return source.
+        
+        Returns:
+            Tuple of (detections, source) where source is 'keyword', 'moe', 'claude', or 'none'
+        """
+        if not text or not text.strip():
+            return [], "none"
+        
+        # 1. Keyword detection
+        keyword_detections = self._keyword_detect(text)
+        if keyword_detections:
+            logger.info(f"🔑 KEYWORD MATCH: {keyword_detections[0].explanation}")
+            return keyword_detections, "keyword"
+        
+        # 2. MoE detection
+        if self.use_moe:
+            moe_detections = self._moe_detect(text)
+            if moe_detections:
+                max_conf = max(d.confidence for d in moe_detections)
+                if max_conf >= self.moe_threshold:
+                    logger.info(f"🤖 MOE DETECTED: {moe_detections[0].detector} (conf: {max_conf:.2f})")
+                    return moe_detections, "moe"
+        
+        # 3. Claude for edge cases
+        if self.use_claude:
+            claude_detections = self._claude_detect(text)
+            if claude_detections:
+                logger.info(f"🧠 CLAUDE DETECTED: {claude_detections[0].category}")
+                return claude_detections, "claude"
+        
+        logger.info(f"✅ SAFE: No threats detected")
+        return [], "none"
+
+
+# Singleton
+_toxicity_detector: Optional[ToxicityDetector] = None
+
+
+def get_toxicity_detector() -> ToxicityDetector:
+    """Get or create toxicity detector singleton."""
+    global _toxicity_detector
+    if _toxicity_detector is None:
+        _toxicity_detector = ToxicityDetector()
+    return _toxicity_detector
+
+# Hindi safe phrases that should never be flagged
+HINDI_SAFE_PHRASES = [
+    "namaste", "namaskar", "kaise ho", "kaise hain", "kya haal",
+    "theek hai", "shukriya", "dhanyavaad", "alvida", "phir milenge",
+    "accha", "bahut accha", "bohot badiya", "mast", "sahi hai",
+]
+
+def is_safe_hindi(text: str) -> bool:
+    """Check if text is a safe Hindi phrase."""
+    text_lower = text.lower().strip()
+    for phrase in HINDI_SAFE_PHRASES:
+        if phrase in text_lower:
+            # Check it's not combined with slurs
+            slurs = ["chod", "maa", "behen", "gandu", "kutt", "bhosdi", "lodu", "randi"]
+            if not any(slur in text_lower for slur in slurs):
+                return True
+    return False

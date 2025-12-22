@@ -59,3 +59,8 @@ models/restrictor-model-final/
 data/training/*.zip
 data/training/*.pt
 data/training/*.bin
+
+# MoE Models (large files ~1.8GB)
+models/moe_muril/
+data/datasets/moe/
+data/datasets/moe_augment/

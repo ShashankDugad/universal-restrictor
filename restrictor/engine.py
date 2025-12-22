@@ -20,7 +20,7 @@ from typing import List, Optional
 from .detectors import FinanceIntentDetector, PIIDetector, PromptInjectionDetector, ToxicityDetector
 from .detectors.claude_detector import ClaudeDetector
 from .detectors.escalation_classifier import EscalationClassifier
-from .detectors.toxicity import get_llm
+from .detectors.toxicity import get_toxicity_detector
 from .models import Action, Category, Decision, Detection, PolicyConfig, Severity
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class Restrictor:
         self.policy = policy or config or PolicyConfig()
 
         # Pre-load Llama Guard model
-        get_llm()
+        get_toxicity_detector()
 
         # Initialize detectors
         self.pii_detector = PIIDetector()
