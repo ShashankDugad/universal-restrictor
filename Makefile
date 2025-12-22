@@ -60,7 +60,7 @@ setup: venv ## Full setup (venv + install + env file)
 	@echo "$(BLUE)Setting up project...$(NC)"
 	. $(VENV)/bin/activate && $(PIP) install -r requirements.txt
 	@if [ ! -f .env ]; then cp .env.example .env; echo "$(YELLOW)Created .env from .env.example - please edit with your keys$(NC)"; fi
-	@mkdir -p data/prometheus data/grafana
+	@mkdir -p data/prometheus data/grafana grafana/dashboards grafana/provisioning/datasources grafana/provisioning/dashboards
 	@echo "$(GREEN)Setup complete!$(NC)"
 
 env: ## Create .env file from example
@@ -86,9 +86,9 @@ run-prod: ## Run in production mode (no reload)
 run-script: ## Run using run.sh script
 	./run.sh
 
-dashboard: ## Start the admin dashboard
-	@echo "$(BLUE)Starting dashboard on http://localhost:3000/standalone.html$(NC)"
-	cd dashboard && $(PYTHON) -m http.server 3000
+dashboard: ## Open admin dashboard in browser
+	@echo "$(BLUE)Opening dashboard...$(NC)"
+	@open http://localhost:$(PORT)/docs || xdg-open http://localhost:$(PORT)/docs
 
 # =============================================================================
 # TESTING
@@ -107,9 +107,16 @@ test-quick: ## Run quick regex-only tests
 	@echo "$(BLUE)Running quick tests...$(NC)"
 	pytest tests/test_regex_only.py -v
 
-test-sentences: ## Run sentence accuracy tests
-	@echo "$(BLUE)Running sentence tests...$(NC)"
-	pytest tests/test_sentences.py -v
+test-detection: ## Test detection pipeline
+	@echo "$(BLUE)Testing detection pipeline...$(NC)"
+	@echo "1. Keyword (bhenchod):"
+	@curl -s -X POST http://localhost:$(PORT)/analyze -H "Content-Type: application/json" -H "X-API-Key: sk-dev-1234567890abcdef12345678" -d '{"text": "bhenchod"}' | python -c "import sys,json; r=json.load(sys.stdin); print(f'   {r[\"action\"]} | {r[\"detections\"][0][\"detector\"] if r[\"detections\"] else \"none\"}')"
+	@echo "2. MoE (harassment):"
+	@curl -s -X POST http://localhost:$(PORT)/analyze -H "Content-Type: application/json" -H "X-API-Key: sk-dev-1234567890abcdef12345678" -d '{"text": "you are worthless garbage"}' | python -c "import sys,json; r=json.load(sys.stdin); print(f'   {r[\"action\"]} | {r[\"detections\"][0][\"detector\"] if r[\"detections\"] else \"none\"}')"
+	@echo "3. Safe (hello):"
+	@curl -s -X POST http://localhost:$(PORT)/analyze -H "Content-Type: application/json" -H "X-API-Key: sk-dev-1234567890abcdef12345678" -d '{"text": "Hello, how are you?"}' | python -c "import sys,json; r=json.load(sys.stdin); print(f'   {r[\"action\"]}')"
+	@echo "4. PII (email):"
+	@curl -s -X POST http://localhost:$(PORT)/analyze -H "Content-Type: application/json" -H "X-API-Key: sk-dev-1234567890abcdef12345678" -d '{"text": "My email is test@example.com"}' | python -c "import sys,json; r=json.load(sys.stdin); print(f'   {r[\"action\"]} | {r[\"detections\"][0][\"detector\"] if r[\"detections\"] else \"none\"}')"
 
 # =============================================================================
 # CODE QUALITY
@@ -154,6 +161,26 @@ docker-clean: ## Remove Docker image
 	docker rmi $(DOCKER_IMAGE) || true
 
 # =============================================================================
+# DOCKER COMPOSE
+# =============================================================================
+
+up: ## Start all services (API + Redis + Prometheus + Grafana)
+	@echo "$(BLUE)Starting all services...$(NC)"
+	docker-compose up -d
+	@echo "$(GREEN)All services started!$(NC)"
+	@make urls
+
+down: ## Stop all services
+	@echo "$(BLUE)Stopping all services...$(NC)"
+	docker-compose down
+
+restart: ## Restart all services
+	docker-compose restart
+
+logs-docker: ## View Docker logs
+	docker-compose logs -f
+
+# =============================================================================
 # KUBERNETES / HELM
 # =============================================================================
 
@@ -188,25 +215,19 @@ k8s-port-forward: ## Port forward to Kubernetes service
 
 monitoring-up: ## Start Prometheus and Grafana
 	@echo "$(BLUE)Starting monitoring stack...$(NC)"
-	@mkdir -p data/prometheus data/grafana
-	docker run -d --name prometheus -p 9090:9090 \
-		-v $(PWD)/prometheus.yml:/etc/prometheus/prometheus.yml \
-		-v $(PWD)/data/prometheus:/prometheus \
-		--add-host=host.docker.internal:host-gateway \
-		prom/prometheus || echo "$(YELLOW)Prometheus already running$(NC)"
-	docker run -d --name grafana -p 3001:3000 \
-		-v $(PWD)/data/grafana:/var/lib/grafana \
-		grafana/grafana || echo "$(YELLOW)Grafana already running$(NC)"
+	docker-compose up -d prometheus grafana
 	@echo "$(GREEN)Prometheus: http://localhost:9090$(NC)"
 	@echo "$(GREEN)Grafana: http://localhost:3001 (admin/admin)$(NC)"
 
 monitoring-down: ## Stop Prometheus and Grafana
 	@echo "$(BLUE)Stopping monitoring stack...$(NC)"
-	docker stop prometheus grafana || true
-	docker rm prometheus grafana || true
+	docker-compose stop prometheus grafana
 
 monitoring-logs: ## View monitoring logs
-	docker logs -f prometheus & docker logs -f grafana
+	docker-compose logs -f prometheus grafana
+
+grafana-open: ## Open Grafana dashboard in browser
+	@open http://localhost:3001/d/restrictor-main/universal-restrictor || xdg-open http://localhost:3001/d/restrictor-main/universal-restrictor
 
 # =============================================================================
 # REDIS
@@ -214,28 +235,49 @@ monitoring-logs: ## View monitoring logs
 
 redis-up: ## Start Redis container
 	@echo "$(BLUE)Starting Redis...$(NC)"
-	docker run -d --name redis -p 6379:6379 redis:alpine || echo "$(YELLOW)Redis already running$(NC)"
+	docker run -d --name redis -p 6379:6379 redis:alpine 2>/dev/null || echo "$(YELLOW)Redis already running$(NC)"
 	@echo "$(GREEN)Redis running on localhost:6379$(NC)"
 
 redis-down: ## Stop Redis container
 	@echo "$(BLUE)Stopping Redis...$(NC)"
-	docker stop redis || true
-	docker rm redis || true
+	docker stop redis 2>/dev/null || true
+	docker rm redis 2>/dev/null || true
 
 redis-cli: ## Open Redis CLI
 	docker exec -it redis redis-cli
 
+redis-flush: ## Flush Redis data
+	@echo "$(BLUE)Flushing Redis...$(NC)"
+	redis-cli FLUSHALL
+	@echo "$(GREEN)Redis flushed.$(NC)"
+
 # =============================================================================
-# TRAINING & FEEDBACK
+# TRAINING & MODELS
 # =============================================================================
 
 train: ## Run active learning training job
 	@echo "$(BLUE)Running training job...$(NC)"
 	$(PYTHON) -m restrictor.training.active_learner
 
+train-moe: ## Instructions to train MoE model
+	@echo "$(BLUE)MoE Training Instructions$(NC)"
+	@echo "========================="
+	@echo "1. Open Google Colab with GPU (T4 or better)"
+	@echo "2. Upload: data/training/train_moe_2stage_muril.ipynb"
+	@echo "3. Upload: data/datasets/moe/router_train_v2.jsonl"
+	@echo "4. Run all cells (~1.5 hours)"
+	@echo "5. Download moe_muril.zip"
+	@echo "6. Extract to models/moe_muril/"
+
 patterns: ## Show learned patterns
 	@echo "$(BLUE)Learned patterns:$(NC)"
 	@cat restrictor/detectors/learned_patterns.json 2>/dev/null || echo "No learned patterns yet"
+
+model-check: ## Check if MoE models are loaded
+	@echo "$(BLUE)Checking models...$(NC)"
+	@ls -lh models/moe_muril/stage1_binary/ 2>/dev/null || echo "$(RED)Stage 1 model not found$(NC)"
+	@ls -lh models/moe_muril/stage2_category/ 2>/dev/null || echo "$(RED)Stage 2 model not found$(NC)"
+	@echo "$(GREEN)Model check complete.$(NC)"
 
 # =============================================================================
 # UTILITIES
@@ -263,8 +305,16 @@ health: ## Check API health
 analyze: ## Quick analyze test (usage: make analyze TEXT="your text")
 	@curl -s -X POST http://localhost:$(PORT)/analyze \
 		-H "Content-Type: application/json" \
-		-H "X-API-Key: $${API_KEY:-test-key}" \
+		-H "X-API-Key: sk-dev-1234567890abcdef12345678" \
 		-d '{"text": "$(TEXT)"}' | python -m json.tool
+
+status: ## Check status of all services
+	@echo "$(BLUE)Service Status$(NC)"
+	@echo "==============="
+	@echo -n "API:        " && curl -s http://localhost:$(PORT)/health | python -c "import sys,json; print(json.load(sys.stdin).get('status','down'))" 2>/dev/null || echo "$(RED)down$(NC)"
+	@echo -n "Redis:      " && redis-cli ping 2>/dev/null || echo "$(RED)down$(NC)"
+	@echo -n "Prometheus: " && curl -s http://localhost:9090/-/healthy >/dev/null && echo "$(GREEN)healthy$(NC)" || echo "$(RED)down$(NC)"
+	@echo -n "Grafana:    " && curl -s http://localhost:3001/api/health >/dev/null && echo "$(GREEN)healthy$(NC)" || echo "$(RED)down$(NC)"
 
 # =============================================================================
 # DEVELOPMENT WORKFLOW
@@ -287,8 +337,8 @@ urls: ## Show all service URLs
 	@echo "API:        http://localhost:$(PORT)"
 	@echo "Swagger:    http://localhost:$(PORT)/docs"
 	@echo "Metrics:    http://localhost:$(PORT)/metrics"
-	@echo "Dashboard:  http://localhost:3000/standalone.html"
 	@echo "Prometheus: http://localhost:9090"
-	@echo "Grafana:    http://localhost:3001"
+	@echo "Grafana:    http://localhost:3001 (admin/admin)"
+	@echo "Dashboard:  http://localhost:3001/d/restrictor-main/universal-restrictor"
 	@echo "Redis:      localhost:6379"
 	@echo ""

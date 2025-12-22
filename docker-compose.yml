@@ -1,13 +1,3 @@
-# Universal Restrictor - Docker Compose
-#
-# Usage:
-#   docker-compose up        # Start the service
-#   docker-compose up -d     # Start in background
-#   docker-compose down      # Stop the service
-#   docker-compose logs -f   # View logs
-
-version: '3.8'
-
 services:
   api:
     build:
@@ -17,19 +7,53 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379
+      - API_KEYS=${API_KEYS}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    restart: unless-stopped
 
-  # Optional: Add for production monitoring (Step 3+)
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   ports:
-  #     - "9090:9090"
-  #   volumes:
-  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  redis:
+    image: redis:alpine
+    container_name: restrictor-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: restrictor-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: restrictor-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
