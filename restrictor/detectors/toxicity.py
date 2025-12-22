@@ -105,11 +105,22 @@ HINDI_SLURS = [
     "randi", "harami", "sala", "kamina", "chut", "lund", "gaand",
 ]
 
-def is_safe_hindi(text: str) -> bool:
-    """Check if text is a safe Hindi phrase (not combined with slurs)."""
+ENGLISH_SAFE_PHRASES = [
+    "went back to my country", "going back to my country", 
+    "returned to my country", "visiting my country",
+    "traveled to my country", "trip to my country",
+    "vacation in my", "holiday in my",
+]
+
+def is_safe_phrase(text: str) -> bool:
+    """Check if text is a safe phrase (English or Hindi, not combined with slurs)."""
     text_lower = text.lower().strip()
     
-    # Check if any safe phrase is present
+    # Check English safe phrases first (no slur check needed)
+    if any(phrase in text_lower for phrase in ENGLISH_SAFE_PHRASES):
+        return True
+    
+    # Check if any Hindi safe phrase is present
     has_safe = any(phrase in text_lower for phrase in HINDI_SAFE_PHRASES)
     if not has_safe:
         return False
@@ -139,11 +150,22 @@ HINDI_SLURS = [
     "randi", "harami", "sala", "kamina", "chut", "lund", "gaand",
 ]
 
-def is_safe_hindi(text: str) -> bool:
-    """Check if text is a safe Hindi phrase (not combined with slurs)."""
+ENGLISH_SAFE_PHRASES = [
+    "went back to my country", "going back to my country", 
+    "returned to my country", "visiting my country",
+    "traveled to my country", "trip to my country",
+    "vacation in my", "holiday in my",
+]
+
+def is_safe_phrase(text: str) -> bool:
+    """Check if text is a safe phrase (English or Hindi, not combined with slurs)."""
     text_lower = text.lower().strip()
     
-    # Check if any safe phrase is present
+    # Check English safe phrases first (no slur check needed)
+    if any(phrase in text_lower for phrase in ENGLISH_SAFE_PHRASES):
+        return True
+    
+    # Check if any Hindi safe phrase is present
     has_safe = any(phrase in text_lower for phrase in HINDI_SAFE_PHRASES)
     if not has_safe:
         return False
@@ -266,8 +288,8 @@ class ToxicityDetector:
             return []
         
         # 0. Check for safe Hindi phrases first (prevent false positives)
-        if is_safe_hindi(text):
-            logger.info(f"✅ SAFE HINDI: '{text[:30]}...' - skipping detection")
+        if is_safe_phrase(text):
+            logger.info(f"✅ SAFE PHRASE: '{text[:30]}...' - skipping detection")
             return []
         
         all_detections = []
