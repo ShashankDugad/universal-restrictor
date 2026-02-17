@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "universal-restrictor.fullname" . }}
+  labels:
+    {{- include "universal-restrictor.labels" . | nindent 4 }}
+data:
+  RATE_LIMIT: {{ .Values.config.rateLimit | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  ENABLE_DOCS: {{ .Values.config.enableDocs | quote }}
+  {{- if .Values.config.corsOrigins }}
+  CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  {{- end }}
+  {{- if .Values.audit.enabled }}
+  AUDIT_LOG_FILE: "/data/audit.log"
+  {{- end }}

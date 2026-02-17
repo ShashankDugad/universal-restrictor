@@ -1,0 +1,147 @@
+{
+  "dashboard": {
+    "title": "Universal Restrictor - Production",
+    "uid": "restrictor-v2",
+    "tags": ["restrictor", "api", "security"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "panels": [
+      {
+        "title": "🛡️ System Overview",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "title": "Total Requests",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 0, "y": 1},
+        "targets": [{"expr": "sum(restrictor_requests_total)", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+      },
+      {
+        "title": "Requests/min",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 4, "y": 1},
+        "targets": [{"expr": "sum(rate(restrictor_requests_total[1m])) * 60", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"unit": "rpm", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
+      },
+      {
+        "title": "Blocked",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 8, "y": 1},
+        "targets": [{"expr": "sum(restrictor_actions_total{action=\"block\"})", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "red", "value": null}]}}}
+      },
+      {
+        "title": "Redacted",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 12, "y": 1},
+        "targets": [{"expr": "sum(restrictor_actions_total{action=\"redact\"})", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "yellow", "value": null}]}}}
+      },
+      {
+        "title": "Allowed",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 16, "y": 1},
+        "targets": [{"expr": "sum(restrictor_actions_total{action=\"allow\"})", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+      },
+      {
+        "title": "Claude Cost",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 20, "y": 1},
+        "targets": [{"expr": "restrictor_claude_cost_usd_total", "refId": "A"}],
+        "options": {"colorMode": "background", "graphMode": "area"},
+        "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 4, "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "purple", "value": null}]}}}
+      },
+      {
+        "title": "📊 Request Traffic",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6}
+      },
+      {
+        "title": "Request Rate Over Time",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 16, "x": 0, "y": 7},
+        "targets": [
+          {"expr": "sum(rate(restrictor_requests_total[1m])) * 60", "refId": "A", "legendFormat": "Total"},
+          {"expr": "sum(rate(restrictor_requests_total{status=\"200\"}[1m])) * 60", "refId": "B", "legendFormat": "Success"},
+          {"expr": "sum(rate(restrictor_requests_total{status=~\"4..|5..\"}[1m])) * 60", "refId": "C", "legendFormat": "Errors"}
+        ],
+        "fieldConfig": {"defaults": {"unit": "rpm", "custom": {"fillOpacity": 20, "lineWidth": 2}}}
+      },
+      {
+        "title": "Actions Distribution",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 7},
+        "targets": [{"expr": "sum by (action) (restrictor_actions_total)", "refId": "A", "legendFormat": "{{action}}"}],
+        "options": {"legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "pieType": "donut"},
+        "fieldConfig": {"overrides": [
+          {"matcher": {"id": "byName", "options": "allow"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "block"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "redact"}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "allow_with_warning"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]}
+        ]}
+      },
+      {
+        "title": "🔍 Detections",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 15}
+      },
+      {
+        "title": "Detections by Category",
+        "type": "barchart",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [{"expr": "sum by (category) (restrictor_detections_total)", "refId": "A", "legendFormat": "{{category}}"}],
+        "options": {"orientation": "horizontal", "showValue": "always"},
+        "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}}
+      },
+      {
+        "title": "Detection Rate by Category",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [{"expr": "sum by (category) (rate(restrictor_detections_total[5m])) * 60", "refId": "A", "legendFormat": "{{category}}"}],
+        "fieldConfig": {"defaults": {"unit": "rpm", "custom": {"fillOpacity": 30}}}
+      },
+      {
+        "title": "⚡ Performance",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}
+      },
+      {
+        "title": "Request Latency (p50, p95, p99)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
+        "targets": [
+          {"expr": "histogram_quantile(0.50, sum(rate(restrictor_request_latency_seconds_bucket[5m])) by (le))", "refId": "A", "legendFormat": "p50"},
+          {"expr": "histogram_quantile(0.95, sum(rate(restrictor_request_latency_seconds_bucket[5m])) by (le))", "refId": "B", "legendFormat": "p95"},
+          {"expr": "histogram_quantile(0.99, sum(rate(restrictor_request_latency_seconds_bucket[5m])) by (le))", "refId": "C", "legendFormat": "p99"}
+        ],
+        "fieldConfig": {"defaults": {"unit": "s", "custom": {"fillOpacity": 10}}}
+      },
+      {
+        "title": "Active Requests",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 25},
+        "targets": [{"expr": "restrictor_active_requests", "refId": "A"}],
+        "fieldConfig": {"defaults": {"min": 0, "max": 100, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}, {"color": "red", "value": 80}]}}}
+      },
+      {
+        "title": "Rate Limit Hits",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 25},
+        "targets": [{"expr": "sum(restrictor_rate_limit_hits_total)", "refId": "A"}],
+        "options": {"colorMode": "background"},
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+      }
+    ],
+    "refresh": "10s",
+    "time": {"from": "now-1h", "to": "now"}
+  },
+  "overwrite": true
+}

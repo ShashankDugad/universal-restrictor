@@ -1,0 +1,10 @@
+# Universal Restrictor - Development Requirements
+# Install with: pip install -r requirements-dev.txt
+
+# Include all production dependencies
+-r requirements.txt
+
+# Additional dev tools
+ipython>=8.0.0
+jupyter>=1.0.0
+pre-commit>=3.0.0

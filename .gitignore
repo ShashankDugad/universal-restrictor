@@ -1,0 +1,150 @@
+# Universal Restrictor .gitignore
+
+# ============================================
+# DATA - Large files, raw data, backups
+# ============================================
+
+# Old/backup datasets (large, not needed in git)
+data/datasets/_old_backup/
+data/datasets/backup/
+data/datasets/raw/
+
+# Raw scraped data (large, regeneratable)
+data/collection/*_raw.jsonl
+data/collection/annotated_*.jsonl
+
+# Large dataset files (keep final curated only)
+data/datasets/curated/intermediate/
+*.csv
+
+# But DO keep these:
+# - data/gold/ (hand-verified, small, critical)
+# - data/policy/ (documentation)
+# - data/datasets/curated/final/ (production dataset)
+
+# ============================================
+# MODELS - Large binary files
+# ============================================
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+models/
+checkpoints/
+*.h5
+
+# But DO keep config files
+!config.json
+!MODEL_CARD.md
+
+# ============================================
+# PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# ============================================
+# IDE / EDITOR
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================
+# JUPYTER / COLAB
+# ============================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# ============================================
+# ENVIRONMENT / SECRETS
+# ============================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.yaml
+credentials.json
+
+# But DO keep example
+!.env.example
+
+# ============================================
+# LOGS / TEMP
+# ============================================
+logs/
+*.log
+tmp/
+temp/
+.cache/
+
+# ============================================
+# NODE / DASHBOARD
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dashboard/dist/
+dashboard/build/
+
+# ============================================
+# AWS / TERRAFORM
+# ============================================
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ============================================
+# TESTING
+# ============================================
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+coverage.xml
+*.cover
+
+# ============================================
+# MISC
+# ============================================
+*.zip
+*.tar.gz
+*.rar

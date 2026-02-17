@@ -1,0 +1,16 @@
+{
+  "patterns": [
+    {
+      "pattern": "(?i)\\bit\\s+is\\s+an\\s+email\\b",
+      "name": "learned_pii_regex_it_is_an_email",
+      "category": "pii_regex",
+      "source_feedback": "fb_8f5279ae904f",
+      "added_at": "2025-12-18T06:21:29.654518"
+    }
+  ],
+  "metadata": {
+    "created": "2025-12-18T06:21:29.654310",
+    "last_updated": "2025-12-18T06:21:29.655728",
+    "total_patterns": 1
+  }
+}

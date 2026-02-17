@@ -1,0 +1,52 @@
+{{- if .Values.grafana.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "universal-restrictor.fullname" . }}-dashboard
+  labels:
+    {{- include "universal-restrictor.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  universal-restrictor.json: |
+    {
+      "dashboard": {
+        "title": "Universal Restrictor",
+        "uid": "universal-restrictor",
+        "panels": [
+          {
+            "title": "Requests per Second",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "targets": [{"expr": "rate(restrictor_requests_total[5m])", "legendFormat": "{{method}} {{endpoint}}"}]
+          },
+          {
+            "title": "Detection by Category",
+            "type": "piechart",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "targets": [{"expr": "sum by (category) (restrictor_detections_total)", "legendFormat": "{{category}}"}]
+          },
+          {
+            "title": "Response Latency (p95)",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "targets": [{"expr": "histogram_quantile(0.95, rate(restrictor_request_latency_seconds_bucket[5m]))", "legendFormat": "p95"}]
+          },
+          {
+            "title": "Claude API Cost (USD)",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+            "targets": [{"expr": "restrictor_claude_cost_usd_total", "legendFormat": "Total Cost"}]
+          },
+          {
+            "title": "Rate Limit Hits",
+            "type": "graph",
+            "gridPos": {"h": 4, "w": 6, "x": 18, "y": 8},
+            "targets": [{"expr": "rate(restrictor_rate_limit_hits_total[5m])", "legendFormat": "{{limit_type}}"}]
+          }
+        ],
+        "refresh": "10s",
+        "schemaVersion": 30,
+        "timezone": "browser"
+      }
+    }
+{{- end }}

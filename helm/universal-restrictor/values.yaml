@@ -1,0 +1,152 @@
+# Default values for universal-restrictor
+
+replicaCount: 2
+
+image:
+  repository: universal-restrictor
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# API Configuration
+config:
+  # Rate limit per minute per API key
+  rateLimit: 60
+  # Log format: text or json
+  logFormat: json
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  logLevel: INFO
+  # Enable Swagger docs (disable in production)
+  enableDocs: false
+  # CORS origins (comma-separated)
+  corsOrigins: ""
+
+# Secrets (use external secrets in production)
+secrets:
+  # API keys format: key1:tenant1:tier1,key2:tenant2:tier2
+  apiKeys: ""
+  # Anthropic API key for Claude (optional)
+  anthropicApiKey: ""
+
+# Redis configuration
+redis:
+  # Enable Redis for rate limiting and storage
+  enabled: true
+  # Use external Redis (set to true and provide url)
+  external: false
+  externalUrl: ""
+  # Internal Redis settings (if external: false)
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8000
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # kubernetes.io/tls-acme: "true"
+    # nginx.ingress.kubernetes.io/rate-limit: "100"
+  hosts:
+    - host: restrictor.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: restrictor-tls
+    #   hosts:
+    #     - restrictor.example.com
+
+# Resource limits
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Pod settings
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Health checks
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+# Audit logging
+audit:
+  # Enable persistent audit log
+  enabled: true
+  # Storage size
+  size: 5Gi
+  # Storage class (empty for default)
+  storageClass: ""
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Pod Disruption Budget
+pdb:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Grafana dashboards
+grafana:
+  dashboards:
+    enabled: true

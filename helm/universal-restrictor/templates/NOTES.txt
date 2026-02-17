@@ -1,0 +1,41 @@
+🎉 Universal Restrictor has been deployed!
+
+1. Get the application URL:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "universal-restrictor.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  watch kubectl get svc --namespace {{ .Release.Namespace }} {{ include "universal-restrictor.fullname" . }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  kubectl port-forward svc/{{ include "universal-restrictor.fullname" . }} 8000:{{ .Values.service.port }} --namespace {{ .Release.Namespace }}
+  echo "Visit http://127.0.0.1:8000"
+{{- end }}
+
+2. Health check:
+  curl http://localhost:8000/health
+
+3. Test API (replace YOUR_API_KEY):
+  curl -X POST http://localhost:8000/analyze \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: YOUR_API_KEY" \
+    -d '{"text": "Test message"}'
+
+{{- if not .Values.secrets.apiKeys }}
+
+⚠️  WARNING: No API keys configured!
+   Set secrets.apiKeys in your values or create the secret manually.
+{{- end }}
+
+{{- if not .Values.secrets.anthropicApiKey }}
+
+ℹ️  INFO: Claude API not configured (premium detection disabled)
+   Set secrets.anthropicApiKey to enable premium detection.
+{{- end }}
+
+📚 Documentation: https://github.com/ShashankDugad/universal-restrictor

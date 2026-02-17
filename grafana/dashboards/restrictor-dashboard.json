@@ -1,0 +1,101 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(restrictor_requests_total)", "refId": "A"}],
+      "title": "Total Requests",
+      "type": "stat"
+    },
+    {
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(restrictor_detections_total)", "refId": "A"}],
+      "title": "Total Detections",
+      "type": "stat"
+    },
+    {
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["mean"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(restrictor_request_latency_seconds_bucket[5m])) * 1000", "refId": "A"}],
+      "title": "P95 Latency (ms)",
+      "type": "stat"
+    },
+    {
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "fieldConfig": {"defaults": {"unit": "percent"}},
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "(sum(restrictor_detections_total) / sum(restrictor_requests_total)) * 100", "refId": "A"}],
+      "title": "Detection Rate %",
+      "type": "stat"
+    },
+    {
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 5,
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [{"expr": "rate(restrictor_requests_total[1m])", "legendFormat": "{{action}}", "refId": "A"}],
+      "title": "Requests per Second",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 6,
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(restrictor_request_latency_seconds_bucket[5m])) * 1000", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, rate(restrictor_request_latency_seconds_bucket[5m])) * 1000", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, rate(restrictor_request_latency_seconds_bucket[5m])) * 1000", "legendFormat": "p99", "refId": "C"}
+      ],
+      "title": "Request Latency",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
+      "id": 7,
+      "options": {"legend": {"displayMode": "list", "placement": "right", "showLegend": true}, "pieType": "pie", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "sum by (category) (restrictor_detections_total)", "legendFormat": "{{category}}", "refId": "A"}],
+      "title": "Detections by Category",
+      "type": "piechart"
+    },
+    {
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
+      "id": 8,
+      "options": {"legend": {"displayMode": "list", "placement": "right", "showLegend": true}, "pieType": "pie", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "sum by (detector) (restrictor_detections_total)", "legendFormat": "{{detector}}", "refId": "A"}],
+      "title": "Detections by Detector",
+      "type": "piechart"
+    },
+    {
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
+      "id": 9,
+      "options": {"legend": {"displayMode": "list", "placement": "right", "showLegend": true}, "pieType": "pie", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "sum by (action) (restrictor_requests_total)", "legendFormat": "{{action}}", "refId": "A"}],
+      "title": "Actions Distribution",
+      "type": "piechart"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["restrictor"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Universal Restrictor",
+  "uid": "restrictor-main",
+  "version": 1
+}

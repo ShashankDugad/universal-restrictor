@@ -1,0 +1,40 @@
+{"text": "भड़वा साला", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "मादरचोद कहीं का", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "बहनचोद तू चुप रह", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "चूतिया है क्या तू", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "गांडू कहीं का", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "कमीने इंसान", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "हरामी की औलाद", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "रंडी का बच्चा", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "भोसड़ीके", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "लौड़े लग गए तेरे", "label": "toxic", "category": "slur", "source": "manual_hindi"}
+{"text": "तेरा टाइम आ गया है, तैयार रह", "label": "toxic", "category": "threat", "source": "manual_hindi"}
+{"text": "मार डालूंगा तुझे", "label": "toxic", "category": "threat", "source": "manual_hindi"}
+{"text": "तेरी जान ले लूंगा", "label": "toxic", "category": "threat", "source": "manual_hindi"}
+{"text": "देख लूंगा तुझे बाहर", "label": "toxic", "category": "threat", "source": "manual_hindi"}
+{"text": "तेरा खून पी जाऊंगा", "label": "toxic", "category": "threat", "source": "manual_hindi"}
+{"text": "bc tu pagal hai kya", "label": "toxic", "category": "slur_hinglish", "source": "manual_hindi"}
+{"text": "mc sala", "label": "toxic", "category": "slur_hinglish", "source": "manual_hindi"}
+{"text": "chutiya saala", "label": "toxic", "category": "slur_hinglish", "source": "manual_hindi"}
+{"text": "bhenchod tune kya kiya", "label": "toxic", "category": "slur_hinglish", "source": "manual_hindi"}
+{"text": "gaandu insaan", "label": "toxic", "category": "slur_hinglish", "source": "manual_hindi"}
+{"text": "नमस्ते, कैसे हो आप?", "label": "safe", "category": "greeting", "source": "manual_hindi"}
+{"text": "क्या हाल है भाई?", "label": "safe", "category": "greeting", "source": "manual_hindi"}
+{"text": "शुभ प्रभात", "label": "safe", "category": "greeting", "source": "manual_hindi"}
+{"text": "बहुत अच्छा मिलकर", "label": "safe", "category": "greeting", "source": "manual_hindi"}
+{"text": "धन्यवाद आपका", "label": "safe", "category": "greeting", "source": "manual_hindi"}
+{"text": "आज मौसम बहुत अच्छा है", "label": "safe", "category": "normal", "source": "manual_hindi"}
+{"text": "खाना बहुत स्वादिष्ट था", "label": "safe", "category": "normal", "source": "manual_hindi"}
+{"text": "यह फिल्म बहुत अच्छी है", "label": "safe", "category": "normal", "source": "manual_hindi"}
+{"text": "कल मिलते हैं", "label": "safe", "category": "normal", "source": "manual_hindi"}
+{"text": "बहुत मेहनत की तुमने", "label": "safe", "category": "normal", "source": "manual_hindi"}
+{"text": "बहुत मुश्किल है यह", "label": "safe", "category": "frustration", "source": "manual_hindi"}
+{"text": "थक गया हूं आज", "label": "safe", "category": "frustration", "source": "manual_hindi"}
+{"text": "यह बहुत कठिन है", "label": "safe", "category": "frustration", "source": "manual_hindi"}
+{"text": "परेशान हो गया हूं", "label": "safe", "category": "frustration", "source": "manual_hindi"}
+{"text": "सर दर्द हो रहा है", "label": "safe", "category": "frustration", "source": "manual_hindi"}
+{"text": "bhai kya scene hai", "label": "safe", "category": "hinglish_normal", "source": "manual_hindi"}
+{"text": "chal theek hai", "label": "safe", "category": "hinglish_normal", "source": "manual_hindi"}
+{"text": "bahut mast hai yaar", "label": "safe", "category": "hinglish_normal", "source": "manual_hindi"}
+{"text": "time nahi hai mujhe", "label": "safe", "category": "hinglish_normal", "source": "manual_hindi"}
+{"text": "tera number aa gaya", "label": "safe", "category": "hinglish_normal", "source": "manual_hindi"}

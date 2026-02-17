@@ -1,0 +1,78 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Models (large files)
+models/*.gguf
+models/*.bin
+
+# Data
+data/*.json
+data/*.jsonl
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Prometheus & Grafana data
+data/prometheus/
+data/grafana/
+
+# Training data (too large for git)
+data/datasets/*.jsonl
+
+# Custom trained model (too large for git)
+models/restrictor-model-final/
+
+# Training artifacts
+data/training/*.zip
+data/training/*.pt
+data/training/*.bin
+
+# MoE Models (large files ~1.8GB)
+models/moe_muril/
+data/datasets/moe/
+data/datasets/moe_augment/
+
+# Collection intermediate files
+data/collection/*_raw.jsonl
+data/collection/combined_raw.jsonl
+data/collection/needs_annotation.jsonl
+
+# Curated intermediate files
+data/datasets/curated/raw/
+data/datasets/curated/clean/
+
+# Keep final dataset (explicitly track)
+!data/datasets/curated/final/

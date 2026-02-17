@@ -1,0 +1,24 @@
+# Core
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Detection
+llama-cpp-python>=0.2.0
+transformers>=4.35.0
+torch>=2.0.0
+
+# Storage
+redis>=5.0.0
+
+# Claude API (premium detection)
+anthropic>=0.18.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.25.0
+
+# Hugging Face (model download)
+huggingface-hub>=0.19.0
+prometheus-client>=0.19.0

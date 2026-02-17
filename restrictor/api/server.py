@@ -1,0 +1,540 @@
+"""
+Universal Restrictor API Server.
+Security-hardened: Required auth, restricted CORS, sanitized errors.
+"""
+
+import logging
+import os
+import traceback
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel, Field, validator
+from starlette.responses import Response
+
+from ..engine import Restrictor
+from ..feedback.models import FeedbackType
+from ..feedback.storage import get_feedback_storage
+from ..models import PolicyConfig
+from .logging_config import get_audit_logger
+from .metrics import record_detection
+from .middleware import MetricsMiddleware, RateLimitMiddleware
+from .dashboard_routes import router as dashboard_router
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Security scheme for Swagger UI
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Initialize app
+app = FastAPI(
+    title="Universal Restrictor API",
+    description="Model-agnostic content classification for LLM safety",
+    version="0.1.0",
+    docs_url="/docs" if os.getenv("ENABLE_DOCS", "true").lower() == "true" else None,
+    redoc_url=None,
+)
+
+# CORS - Restrict to allowed origins
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "").split(",")
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
+
+if not ALLOWED_ORIGINS:
+    logger.warning("No CORS_ORIGINS set. CORS disabled (same-origin only).")
+else:
+    logger.info(f"CORS enabled for origins: {ALLOWED_ORIGINS}")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["X-API-Key", "Content-Type"],
+    )
+
+# Prometheus metrics middleware
+app.add_middleware(MetricsMiddleware)
+
+# Rate limiting
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
+app.add_middleware(RateLimitMiddleware, requests_per_minute=RATE_LIMIT)
+
+# Initialize restrictor
+restrictor = Restrictor()
+logger.info("Restrictor ready.")
+
+
+# === Request/Response Models ===
+
+class AnalyzeRequest(BaseModel):
+    """Request model for text analysis."""
+    text: str = Field(..., min_length=1, max_length=50000)
+    detect_pii: bool = True
+    detect_toxicity: bool = True
+    detect_prompt_injection: bool = True
+    detect_finance_intent: bool = True
+    pii_types: Optional[List[str]] = None
+    toxicity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    pii_confidence_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    @validator('text')
+    def text_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Text cannot be empty')
+        return v
+
+
+class DetectionResponse(BaseModel):
+    """Individual detection in response."""
+    category: str
+    severity: str
+    confidence: float
+    matched_text: str
+    position: dict
+    explanation: str
+    detector: str
+
+
+class AnalyzeResponse(BaseModel):
+    """Response model for text analysis."""
+    action: str
+    request_id: str
+    processing_time_ms: float
+    summary: dict
+    detections: List[DetectionResponse]
+    redacted_text: Optional[str] = None
+
+
+class FeedbackSubmitRequest(BaseModel):
+    """Request model for feedback submission."""
+    request_id: str = Field(..., min_length=36, max_length=36)
+    feedback_type: str
+    corrected_category: Optional[str] = None
+    comment: Optional[str] = Field(None, max_length=1000)
+
+    @validator('request_id')
+    def validate_request_id(cls, v):
+        import re
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+        if not uuid_pattern.match(v):
+            raise ValueError('Invalid request_id format')
+        return v
+
+    @validator('feedback_type')
+    def validate_feedback_type(cls, v):
+        valid_types = ['correct', 'false_positive', 'false_negative', 'category_correction']
+        if v not in valid_types:
+            raise ValueError(f'feedback_type must be one of: {valid_types}')
+        return v
+
+
+# === Error Handling ===
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.detail if isinstance(exc.detail, dict) else {
+            "error": "request_failed",
+            "message": str(exc.detail)
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error: {exc}\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": "An internal error occurred. Please try again later."
+        }
+    )
+
+
+# === Helper Functions ===
+
+def mask_pii_in_response(matched_text: str, category: str) -> str:
+    """Mask PII in API responses."""
+    if not category.startswith("pii_"):
+        return matched_text
+    if len(matched_text) <= 4:
+        return "***"
+    return f"{matched_text[:2]}{'*' * (len(matched_text) - 4)}{matched_text[-2:]}"
+
+
+async def get_api_key(
+    api_key: str = Security(api_key_header),
+    request: Request = None
+) -> dict:
+    """Validate API key with Swagger UI support."""
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "authentication_required",
+                "message": "API key required. Include X-API-Key header."
+            }
+        )
+
+    from .middleware import get_auth
+    auth = get_auth()
+    is_valid, tenant_info = auth.validate(api_key)
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "invalid_api_key",
+                "message": "Invalid API key."
+            }
+        )
+
+    return tenant_info
+
+
+# === Endpoints ===
+
+app.include_router(dashboard_router)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint (no auth required)."""
+    return {
+        "status": "healthy",
+        "version": "0.1.0",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_text(
+    request: AnalyzeRequest,
+    tenant: dict = Depends(get_api_key)
+):
+    """
+    Analyze text for PII, toxicity, prompt injection, and finance intent.
+    Requires valid API key.
+    """
+    policy = PolicyConfig(
+        detect_pii=request.detect_pii,
+        detect_toxicity=request.detect_toxicity,
+        detect_prompt_injection=request.detect_prompt_injection,
+        detect_finance_intent=request.detect_finance_intent,
+        pii_types=request.pii_types,
+        toxicity_threshold=request.toxicity_threshold,
+        pii_confidence_threshold=request.pii_confidence_threshold,
+    )
+
+    result = restrictor.analyze(request.text, policy=policy)
+
+    # Record Prometheus metrics
+    for detection in result.detections:
+        record_detection(detection.category.value, result.action.value)
+
+    # Cache for feedback
+    try:
+        storage = get_feedback_storage()
+        storage.cache_request(
+            request_id=result.request_id,
+            input_hash=result.input_hash,
+            input_length=len(request.text),
+            decision=result.action.value,
+            categories=[c.value for c in result.categories_found],
+            confidence=result.max_confidence,
+            tenant_id=tenant.get("tenant_id") if tenant else None
+        )
+    except Exception as e:
+        logger.warning(f"Failed to cache request: {e}")
+
+    # Build response with masked PII
+    detections = []
+    for d in result.detections:
+        detections.append(DetectionResponse(
+            category=d.category.value,
+            severity=d.severity.value,
+            confidence=d.confidence,
+            matched_text=mask_pii_in_response(d.matched_text, d.category.value),
+            position={"start": d.start_pos, "end": d.end_pos},
+            explanation=d.explanation,
+            detector=d.detector
+        ))
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_request(
+        request_id=result.request_id,
+        tenant_id=tenant.get("tenant_id") if tenant else "unknown",
+        input_hash=result.input_hash,
+        input_length=len(request.text),
+        action=result.action.value,
+        categories=[c.value for c in result.categories_found],
+        confidence=result.max_confidence,
+        processing_time_ms=result.processing_time_ms,
+        detectors_used=list(set(d.detector for d in result.detections))
+    )
+
+    return AnalyzeResponse(
+        action=result.action.value,
+        request_id=result.request_id,
+        processing_time_ms=result.processing_time_ms,
+        summary={
+            "categories_found": [c.value for c in result.categories_found],
+            "max_severity": result.max_severity.value if result.max_severity else None,
+            "max_confidence": result.max_confidence,
+            "detection_count": len(result.detections)
+        },
+        detections=detections,
+        redacted_text=result.redacted_text
+    )
+
+
+@app.post("/analyze/batch")
+async def analyze_batch(
+    texts: List[str],
+    tenant: dict = Depends(get_api_key)
+):
+    """Analyze multiple texts. Requires valid API key."""
+    if len(texts) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "batch_too_large", "message": "Maximum 100 texts per batch"}
+        )
+
+    results = []
+    for text in texts:
+        if text and text.strip():
+            result = restrictor.analyze(text)
+            results.append({
+                "action": result.action.value,
+                "request_id": result.request_id,
+                "detection_count": len(result.detections)
+            })
+
+    return {"results": results, "count": len(results)}
+
+
+@app.post("/feedback")
+async def submit_feedback(
+    request: FeedbackSubmitRequest,
+    tenant: dict = Depends(get_api_key)
+):
+    """Submit feedback on a detection. Requires valid API key."""
+    storage = get_feedback_storage()
+
+    try:
+        feedback_type = FeedbackType(request.feedback_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_feedback_type", "message": "Invalid feedback type"}
+        )
+
+    record = storage.store_feedback(
+        request_id=request.request_id,
+        feedback_type=feedback_type,
+        corrected_category=request.corrected_category,
+        comment=request.comment,
+        tenant_id=tenant.get("tenant_id") if tenant else None
+    )
+
+    if record:
+        return {
+            "feedback_id": record.feedback_id,
+            "status": "recorded",
+            "message": "Thank you for your feedback."
+        }
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "request_not_found", "message": "Request ID not found or expired"}
+        )
+
+
+@app.get("/feedback/stats")
+async def get_feedback_stats(tenant: dict = Depends(get_api_key)):
+    """Get feedback statistics. Requires valid API key."""
+    storage = get_feedback_storage()
+    return storage.get_feedback_stats(tenant_id=tenant.get("tenant_id") if tenant else None)
+
+
+@app.get("/categories")
+async def list_categories(tenant: dict = Depends(get_api_key)):
+    """List all detection categories. Requires valid API key."""
+    from ..models import Category
+    return {"categories": [{"name": c.name, "value": c.value} for c in Category]}
+
+
+@app.get("/usage")
+async def get_usage(tenant: dict = Depends(get_api_key)):
+    """Get API usage statistics including Claude API costs."""
+    from restrictor.detectors.usage_tracker import get_usage_tracker
+
+    tracker = get_usage_tracker()
+    if tracker.is_connected:
+        return tracker.get_usage()
+
+    # Fallback to in-memory stats
+    return restrictor.get_api_usage()
+
+
+@app.get("/feedback/list")
+async def list_feedback(tenant: dict = Depends(get_api_key)):
+    """List all feedback for review. Requires valid API key."""
+    storage = get_feedback_storage()
+
+    # Get feedback list from Redis
+    if hasattr(storage, '_client') and storage.is_connected:
+        try:
+            feedback_ids = storage._client.smembers("feedback:all")
+            feedback_list = []
+
+            for fid in feedback_ids:
+                fid = fid.decode() if isinstance(fid, bytes) else fid
+                data = storage._client.get(f"feedback:{fid}")
+                if data:
+                    import json
+                    record = json.loads(data)
+                    # Filter by tenant if needed
+                    if tenant.get("tenant_id") and record.get("tenant_id") != tenant.get("tenant_id"):
+                        continue
+                    feedback_list.append(record)
+
+            # Sort by timestamp descending
+            feedback_list.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+            return {"feedback": feedback_list, "count": len(feedback_list)}
+        except Exception as e:
+            logger.error(f"Failed to list feedback: {e}")
+            return {"feedback": [], "count": 0}
+
+    return {"feedback": [], "count": 0}
+
+
+@app.post("/feedback/{feedback_id}/review")
+async def review_feedback(
+    feedback_id: str,
+    review: dict,
+    tenant: dict = Depends(get_api_key)
+):
+    """Approve or reject feedback. Requires valid API key."""
+    storage = get_feedback_storage()
+    approved = review.get("approved", False)
+
+    if hasattr(storage, '_client') and storage.is_connected:
+        try:
+            import json
+            key = f"feedback:{feedback_id}"
+            data = storage._client.get(key)
+
+            if not data:
+                raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Feedback not found"})
+
+            record = json.loads(data)
+            record["reviewed"] = True
+            record["approved"] = approved
+            record["reviewed_at"] = datetime.utcnow().isoformat()
+            record["reviewed_by"] = tenant.get("tenant_id")
+
+            # If approved, mark for training
+            if approved:
+                record["included_in_training"] = False  # Will be picked up by training job
+
+            storage._client.set(key, json.dumps(record))
+
+            # Update stats cache
+            storage._client.delete("feedback:stats")
+
+            # Log audit
+            audit = get_audit_logger()
+            audit.log_feedback(
+                feedback_id=feedback_id,
+                request_id=record.get("request_id", ""),
+                feedback_type=f"reviewed_{('approved' if approved else 'rejected')}",
+                tenant_id=tenant.get("tenant_id")
+            )
+
+            return {
+                "feedback_id": feedback_id,
+                "status": "approved" if approved else "rejected",
+                "message": "Feedback reviewed successfully"
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to review feedback: {e}")
+            raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
+
+    raise HTTPException(status_code=500, detail={"error": "storage_unavailable", "message": "Storage not available"})
+
+
+@app.post("/admin/train")
+async def run_training(tenant: dict = Depends(get_api_key)):
+    """Run active learning training job. Requires valid API key."""
+    try:
+        from restrictor.training.active_learner import ActiveLearner
+
+        learner = ActiveLearner()
+        result = learner.run_training()
+
+        return {
+            "status": "completed",
+            "feedback_processed": result.feedback_processed,
+            "patterns_added": result.patterns_added,
+            "patterns_skipped": result.patterns_skipped,
+            "errors": result.errors,
+            "timestamp": result.timestamp
+        }
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "training_failed", "message": str(e)}
+        )
+
+
+@app.get("/admin/learned-patterns")
+async def get_learned_patterns(tenant: dict = Depends(get_api_key)):
+    """Get list of learned patterns from active learning."""
+    try:
+        from restrictor.training.active_learner import ActiveLearner
+
+        learner = ActiveLearner()
+        data = learner.load_learned_patterns()
+
+        return {
+            "patterns": data.get("patterns", []),
+            "metadata": data.get("metadata", {}),
+            "count": len(data.get("patterns", []))
+        }
+    except Exception as e:
+        logger.error(f"Failed to get learned patterns: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "fetch_failed", "message": str(e)}
+        )
+
+
+# =============================================================================
+# Prometheus Metrics Endpoint
+# =============================================================================
+
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from restrictor.api.metrics import get_metrics
+    output, content_type = get_metrics()
+    return Response(content=output, media_type=content_type)

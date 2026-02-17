@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+* {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0f3460 100%);
+  min-height: 100vh;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
+.glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.3); }
+.glow-yellow { box-shadow: 0 0 20px rgba(245, 158, 11, 0.3); }
+.glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
+
+.pulse-dot { animation: pulse-dot 2s infinite; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
